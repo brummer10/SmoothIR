@@ -1,0 +1,248 @@
+
+/*
+ * widgets.cc
+ *
+ * SPDX-License-Identifier:  BSD-3-Clause
+ *
+ * Copyright (C) 2026 brummer <brummer@web.de>
+ */
+
+#include "xwidgets.h"
+#include "xfile-dialog.h"
+
+
+char* utf8crop(char* dst, const char* src, size_t sizeDest ) {
+    if( sizeDest ){
+        size_t sizeSrc = strlen(src);
+        while( sizeSrc >= sizeDest ){
+            const char* lastByte = src + sizeSrc;
+            while( lastByte-- > src )
+                if((*lastByte & 0xC0) != 0x80)
+                    break;
+            sizeSrc = lastByte - src;
+        }
+        memcpy(dst, src, sizeSrc);
+        dst[sizeSrc] = '\0';
+    }
+    return dst;
+}
+
+void utf8crop_middle(char* dst, const char* src, size_t maxLen) {
+    size_t len = strlen(src);
+    if (len < maxLen) {
+        strcpy(dst, src);
+        return;
+    }
+
+    if (maxLen < 5) {
+        utf8crop(dst, src, maxLen);
+        return;
+    }
+
+    size_t left = (maxLen - 3) / 6;
+    size_t right = maxLen - 3 - left;
+    char tmp[256];
+    utf8crop(tmp, src, left + 1);
+    strcpy(dst, tmp);
+    strcat(dst, "...");
+    const char* tail = src + len - right;
+    utf8crop(tmp, tail, right + 1);
+    strcat(dst, tmp);
+}
+
+void draw_label(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    if (!w) return;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    //int width = metrics.width-5;
+    //int height = metrics.height-5;
+    if (!metrics.visible) return;
+    char label[124];
+    memset(label, '\0', sizeof(char)*124);
+    utf8crop_middle(label, w->label, 40);
+    cairo_text_extents_t extents_f;
+    cairo_set_font_size (w->crb, w->app->normal_font);
+    cairo_set_source_rgb(w->crb, 0.91, 0.949, 0.883);
+    cairo_text_extents(w->crb, label, &extents_f);
+    double twf = extents_f.width/2.0;
+    cairo_move_to (w->crb, max(5 * w->app->hdpi,(w->scale.init_width*0.5)-twf), (w->scale.init_height - extents_f.height*0.5)  * w->app->hdpi );
+    cairo_show_text(w->crb, label);
+}    
+
+
+static void my_fdialog_response(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    FileButton *filebutton = (FileButton *)w->private_struct;
+    if(user_data !=NULL) {
+        char *tmp = strdup(*(const char**)user_data);
+        free(filebutton->last_path);
+        filebutton->last_path = NULL;
+        filebutton->last_path = strdup(dirname(tmp));
+        filebutton->path = filebutton->last_path;
+        free(tmp);
+    }
+    w->func.user_callback(w,user_data);
+    filebutton->is_active = false;
+    adj_set_value(w->adj,0.0);
+}
+
+static void my_fbutton_callback(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    FileButton *filebutton = (FileButton *)w->private_struct;
+    if (w->flags & HAS_POINTER && adj_get_value(w->adj)){
+        filebutton->is_active = true;
+        if (!filebutton->w) {
+            filebutton->w = open_file_dialog(w,filebutton->path,filebutton->filter);
+            filebutton->w->flags |= HIDE_ON_DELETE;
+            widget_set_title(filebutton->w, _("File Selector - Select WAV File"));
+#ifdef _OS_UNIX_
+            Atom wmStateAbove = XInternAtom(w->app->dpy, "_NET_WM_STATE_ABOVE", 1 );
+            Atom wmNetWmState = XInternAtom(w->app->dpy, "_NET_WM_STATE", 1 );
+            XChangeProperty(w->app->dpy, filebutton->w->widget, wmNetWmState, XA_ATOM, 32, 
+                PropModeReplace, (unsigned char *) &wmStateAbove, 1); 
+#elif defined _WIN32
+            os_set_transient_for_hint(w, filebutton->w);
+#endif
+        } else {
+            widget_show_all(filebutton->w);
+        }
+    } else if (w->flags & HAS_POINTER && !adj_get_value(w->adj)){
+        if(filebutton->is_active)
+            widget_hide(filebutton->w);
+    }
+}
+
+void draw_i_button(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    if (!w) return;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    //int width = metrics.width-5;
+    //int height = metrics.height-5;
+    if (!metrics.visible) return;
+    float offset = 0.0;
+    if(w->state==1 && ! (int)w->adj_y->value) {
+        offset = 2.0;
+    } else if(w->state==1) {
+        offset = 3.0;
+    } else if(w->state==2) {
+        offset = 3.0;
+    } else if(w->state==3) {
+        offset = 2.0;
+    }
+    cairo_text_extents_t extents_f;
+    cairo_set_font_size (w->crb, w->app->normal_font + 1 + offset);
+    cairo_set_source_rgb(w->crb, 0.91, 0.949, 0.883);
+    cairo_text_extents(w->crb, w->label, &extents_f);
+    double twf = extents_f.width/2.0;
+    cairo_move_to (w->crb, max(5 * w->app->hdpi,(w->scale.init_width*0.5)-twf), (w->scale.init_height - extents_f.height*0.5)  * w->app->hdpi );
+    cairo_show_text(w->crb, w->label);
+    
+}
+
+static void my_fbutton_mem_free(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    FileButton *filebutton = (FileButton *)w->private_struct;
+    free(filebutton->last_path);
+    filebutton->last_path = NULL;
+    free(filebutton);
+    filebutton = NULL;
+}
+
+Widget_t *add_my_file_button(Widget_t *parent, int x, int y, int width, int height,
+                           const char* label, const char *path, const char *filter) {
+    FileButton *filebutton = (FileButton*)malloc(sizeof(FileButton));
+    filebutton->path = path;
+    filebutton->filter = filter;
+    filebutton->last_path = NULL;
+    filebutton->w = NULL;
+    filebutton->is_active = false;
+    Widget_t *fbutton = add_toggle_button(parent, label, x, y, width, height);
+    fbutton->private_struct = filebutton;
+    fbutton->flags |= HAS_MEM;
+    fbutton->scale.gravity = CENTER;
+    fbutton->func.mem_free_callback = my_fbutton_mem_free;
+    fbutton->func.value_changed_callback = my_fbutton_callback;
+    fbutton->func.dialog_callback = my_fdialog_response;
+    fbutton->func.expose_callback = draw_i_button;
+    return fbutton;
+}
+
+Widget_t* add_my_label(Widget_t *parent, const char * label,
+                        int x, int y, int width, int height) {
+
+    Widget_t *wid = create_widget(parent->app, parent, x, y, width, height);
+    wid->label = label;
+    wid->scale.gravity = ASPECT;
+    wid->func.expose_callback = draw_label;
+    return wid;
+}
+
+
+static void fxdialog_response(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    FileButton *filebutton = (FileButton *)w->private_struct;
+    if(user_data !=NULL) {
+        char *tmp = strdup(*(const char**)user_data);
+        free(filebutton->last_path);
+        filebutton->last_path = NULL;
+        filebutton->last_path = strdup(dirname(tmp));
+        filebutton->path = filebutton->last_path;
+        free(tmp);
+    }
+    w->func.user_callback(w,user_data);
+    filebutton->is_active = false;
+    adj_set_value(w->adj,0.0);
+}
+
+static void fxbutton_callback(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    FileButton *filebutton = (FileButton *)w->private_struct;
+    if (w->flags & HAS_POINTER && adj_get_value(w->adj)){
+        filebutton->w = save_file_dialog(w,filebutton->path,filebutton->filter);
+#ifdef _OS_UNIX_
+        Atom wmStateAbove = XInternAtom(w->app->dpy, "_NET_WM_STATE_ABOVE", 1 );
+        Atom wmNetWmState = XInternAtom(w->app->dpy, "_NET_WM_STATE", 1 );
+        XChangeProperty(w->app->dpy, filebutton->w->widget, wmNetWmState, XA_ATOM, 32, 
+            PropModeReplace, (unsigned char *) &wmStateAbove, 1); 
+#elif defined _WIN32
+        os_set_transient_for_hint(w, filebutton->w);
+#endif
+        filebutton->is_active = true;
+    }
+}
+
+static void fxbutton_mem_free(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    FileButton *filebutton = (FileButton *)w->private_struct;
+    free(filebutton->last_path);
+    filebutton->last_path = NULL;
+    free(filebutton);
+    filebutton = NULL;
+}
+
+Widget_t *add_xsave_file_button(Widget_t *parent, int x, int y, int width, int height,
+                           const char *label, const char *path, const char *filter) {
+    FileButton *filebutton = (FileButton*)malloc(sizeof(FileButton));
+    filebutton->path = path;
+    filebutton->filter = filter;
+    filebutton->last_path = NULL;
+    filebutton->w = NULL;
+    filebutton->is_active = false;
+    Widget_t *fbutton = add_toggle_button(parent, label, x, y, width, height);
+    fbutton->private_struct = filebutton;
+    fbutton->flags |= HAS_MEM;
+    fbutton->scale.gravity = CENTER;
+    fbutton->func.expose_callback = draw_i_button;
+    fbutton->func.mem_free_callback = fxbutton_mem_free;
+    fbutton->func.value_changed_callback = fxbutton_callback;
+    fbutton->func.dialog_callback = fxdialog_response;
+    return fbutton;
+}
+
+Widget_t *add_my_button(Widget_t *parent, int x, int y, int width, int height, const char *label) {
+    Widget_t *fbutton = add_button(parent, label, x, y, width, height);
+    fbutton->func.expose_callback = draw_i_button;
+    return fbutton;
+}
