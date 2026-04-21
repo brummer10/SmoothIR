@@ -326,11 +326,13 @@ private:
         cut = std::min(cut, n - 1);
         double anchor = mag[cut];
         double anchor_lin = db2lin(anchor);
+        const double norm = std::sqrt(2.0);
 
         for (size_t i = 0; i <= cut; ++i) {
             double f = (double)i / (n - 1) * nyquist;
             if (f < 1.0) f = 1.0;
             double H = 1.0 / std::sqrt(1.0 + std::pow(cutoff / f, 2.0 * order));
+            H *= norm;
             double out = anchor_lin * H;
             mag[i] = db(out);
         }

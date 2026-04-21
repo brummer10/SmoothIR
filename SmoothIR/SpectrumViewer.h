@@ -59,6 +59,7 @@ public:
             os_get_root_window(&main, IS_WINDOW),
             0, 0, width, height);
         widget_set_title(top, "Smoothed IR");
+        top->flags = NO_PROPAGATE;
         top->func.expose_callback = draw_window;
 
         spec = create_widget(&main, top,0, 0, width, height-90);
@@ -69,14 +70,14 @@ public:
         ref->flags = USE_TRANSPARENCY | FAST_REDRAW;
         ref->parent_struct = this;
         ref->func.user_callback = ref_load_response;
-        ref_label = add_my_label(top, "",100,347,250,20);
+        ref_label = add_my_label(top, "",100,347,260,20);
         ref_label->label = ref_file.data();
 
         Widget_t* src = add_my_file_button(top, 10, 380, 90, 20, "Source:", " ", ".wav|.WAV");
         src->flags = USE_TRANSPARENCY | FAST_REDRAW;
         src->parent_struct = this;
         src->func.user_callback = src_load_response;
-        src_label = add_my_label(top, "",100,382,250,20);
+        src_label = add_my_label(top, "",100,382,260,20);
         src_label->label = src_file.data();
 
         Widget_t* lowcut = add_knob(top, "LowCut", 370,335,60, 80);
@@ -130,6 +131,11 @@ private:
     Vec diff_;
     Vec ir_;
     std::string ir_file;
+
+    const float f_min = 20.0f;
+    const float f_max = 20000.0f;
+    const float db_min = -108.0f;
+    const float db_max = 6.0f;
 
     // Callbacks
     static void quit_response(void *w_, void* user_data) {
@@ -271,10 +277,6 @@ private:
         const int height = m.height;
 
         const float sample_rate = 48000.0f;
-        const float f_min = 20.0f;
-        const float f_max = 20000.0f;
-        const float db_min = -108.0f;
-        const float db_max = 6.0f;
 
         cairo_set_source_rgb(cr, 0.188, 0.188, 0.188);
         cairo_rectangle(cr, 0, 0, width, height);
@@ -301,10 +303,10 @@ private:
         }
         cairo_stroke(cr);
 
-        drawSpectrum(cr, ref_,   width, height, sample_rate, f_min, f_max, db_min, db_max, 1, 0.333, 0.333,     "reference", 20);
-        drawSpectrum(cr, source_,width, height, sample_rate, f_min, f_max, db_min, db_max, 0.314, 0.98, 0.482,  "source",    40);
-        drawSpectrum(cr, diff_,  width, height, sample_rate, f_min, f_max, db_min, db_max, 1.0, 0.722, 0.424,  "diff", 60, true);
-        drawSpectrum(cr, ir_,    width, height, sample_rate, f_min, f_max, db_min, db_max, 0.545, 0.914, 0.992, "impulse",   80);
+        drawSpectrum(cr, ref_,   width, height, sample_rate, 1.0, 0.333, 0.333,   "reference",  20);
+        drawSpectrum(cr, source_,width, height, sample_rate, 0.314, 0.98, 0.482,  "source",     40);
+        drawSpectrum(cr, diff_,  width, height, sample_rate, 1.0, 0.722, 0.424,   "diff", 60, true);
+        drawSpectrum(cr, ir_,    width, height, sample_rate, 0.545, 0.914, 0.992, "impulse",    80);
 
         cairo_set_source_rgba(cr, 0.973, 0.973, 0.949, 0.6);
         cairo_set_font_size(cr, 10);
@@ -330,8 +332,7 @@ private:
     }
 
     void drawSpectrum(cairo_t* cr, const Vec& mags, int width, int height,
-                      float sample_rate, float f_min, float f_max,
-                      float db_min, float db_max, float r, float g, float b,
+                      float sample_rate, float r, float g, float b,
                       const char* label, float label_y, bool dash = false) {
 
         if (mags.empty()) return;
@@ -339,10 +340,11 @@ private:
         cairo_set_source_rgba(cr, r, g, b, 1.0);
         draw_text(cr, width - 60, label_y, label);
 
-        cairo_set_line_width(cr, 1.0);
-        double dashes[] = {2.0};
+        cairo_set_line_width(cr, 1.5);
+        static const double dashes[] = {2.0};
         if (dash) {
             cairo_set_dash(cr, dashes, 1, 0);
+            cairo_set_line_width(cr, 1.0);
         } else {
             cairo_set_dash(cr, dashes, 0, 0);
         }
@@ -354,8 +356,8 @@ private:
 
         bool started = false;
 
+        float last_x = -1.0f;
         for (int i = 1; i < bins; ++i) {
-
             float freq = (float)i * sample_rate / fft_size;
             if (freq < f_min || freq > f_max) continue;
 
@@ -366,7 +368,10 @@ private:
                 cairo_move_to(cr, x, y);
                 started = true;
             } else {
-                cairo_line_to(cr, x, y);
+                if (x > last_x + 0.5f) {
+                    cairo_line_to(cr, x, y);
+                    last_x = x;
+                }
             }
         }
 

@@ -62,12 +62,14 @@ void draw_label(void *w_, void* user_data) {
     memset(label, '\0', sizeof(char)*124);
     utf8crop_middle(label, w->label, 40);
     cairo_text_extents_t extents_f;
-    cairo_set_font_size (w->crb, w->app->normal_font);
+    widget_set_scale(w);
+    cairo_set_font_size (w->crb, w->app->normal_font * w->app->hdpi);
     cairo_set_source_rgb(w->crb, 0.91, 0.949, 0.883);
     cairo_text_extents(w->crb, label, &extents_f);
     double twf = extents_f.width/2.0;
     cairo_move_to (w->crb, max(5 * w->app->hdpi,(w->scale.init_width*0.5)-twf), (w->scale.init_height - extents_f.height*0.5)  * w->app->hdpi );
     cairo_show_text(w->crb, label);
+    widget_reset_scale(w);
 }    
 
 
@@ -131,6 +133,7 @@ void draw_i_button(void *w_, void* user_data) {
     } else if(w->state==3) {
         offset = 2.0;
     }
+    widget_set_scale(w);
     cairo_text_extents_t extents_f;
     cairo_set_font_size (w->crb, w->app->normal_font + 1 + offset);
     cairo_set_source_rgb(w->crb, 0.91, 0.949, 0.883);
@@ -138,6 +141,7 @@ void draw_i_button(void *w_, void* user_data) {
     double twf = extents_f.width/2.0;
     cairo_move_to (w->crb, max(5 * w->app->hdpi,(w->scale.init_width*0.5)-twf), (w->scale.init_height - extents_f.height*0.5)  * w->app->hdpi );
     cairo_show_text(w->crb, w->label);
+    widget_reset_scale(w);
     
 }
 
@@ -161,7 +165,7 @@ Widget_t *add_my_file_button(Widget_t *parent, int x, int y, int width, int heig
     Widget_t *fbutton = add_toggle_button(parent, label, x, y, width, height);
     fbutton->private_struct = filebutton;
     fbutton->flags |= HAS_MEM;
-    fbutton->scale.gravity = CENTER;
+    fbutton->scale.gravity = ASPECT;
     fbutton->func.mem_free_callback = my_fbutton_mem_free;
     fbutton->func.value_changed_callback = my_fbutton_callback;
     fbutton->func.dialog_callback = my_fdialog_response;
@@ -233,7 +237,7 @@ Widget_t *add_xsave_file_button(Widget_t *parent, int x, int y, int width, int h
     Widget_t *fbutton = add_toggle_button(parent, label, x, y, width, height);
     fbutton->private_struct = filebutton;
     fbutton->flags |= HAS_MEM;
-    fbutton->scale.gravity = CENTER;
+    fbutton->scale.gravity = ASPECT;
     fbutton->func.expose_callback = draw_i_button;
     fbutton->func.mem_free_callback = fxbutton_mem_free;
     fbutton->func.value_changed_callback = fxbutton_callback;
@@ -243,6 +247,7 @@ Widget_t *add_xsave_file_button(Widget_t *parent, int x, int y, int width, int h
 
 Widget_t *add_my_button(Widget_t *parent, int x, int y, int width, int height, const char *label) {
     Widget_t *fbutton = add_button(parent, label, x, y, width, height);
+    fbutton->scale.gravity = ASPECT;
     fbutton->func.expose_callback = draw_i_button;
     return fbutton;
 }

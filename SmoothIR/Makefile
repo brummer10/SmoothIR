@@ -111,7 +111,7 @@ endif
 	# invoke build files
 	OBJECTS = main.cpp
 
-	DEPS = irman.d
+	DEPS = smoothir.d
 
 .PHONY : all 
 
