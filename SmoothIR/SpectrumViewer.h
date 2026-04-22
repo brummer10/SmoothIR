@@ -59,7 +59,7 @@ public:
             os_get_root_window(&main, IS_WINDOW),
             0, 0, width, height);
         widget_set_title(top, "Smoothed IR");
-        top->flags = NO_PROPAGATE;
+        //top->flags = NO_PROPAGATE;
         top->func.expose_callback = draw_window;
 
         spec = create_widget(&main, top,0, 0, width, height-90);
@@ -67,22 +67,23 @@ public:
         spec->func.expose_callback = draw_callback;
 
         Widget_t* ref = add_my_file_button(top, 10, 345, 90, 20, "Reference:", " ", ".wav|.WAV");
-        ref->flags = USE_TRANSPARENCY | FAST_REDRAW;
+        ref->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         ref->parent_struct = this;
         ref->func.user_callback = ref_load_response;
         ref_label = add_my_label(top, "",100,347,260,20);
         ref_label->label = ref_file.data();
 
         Widget_t* src = add_my_file_button(top, 10, 380, 90, 20, "Source:", " ", ".wav|.WAV");
-        src->flags = USE_TRANSPARENCY | FAST_REDRAW;
+        src->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         src->parent_struct = this;
         src->func.user_callback = src_load_response;
         src_label = add_my_label(top, "",100,382,260,20);
         src_label->label = src_file.data();
 
-        Widget_t* lowcut = add_knob(top, "LowCut", 370,335,60, 80);
-        set_adjustment(lowcut->adj, 100.0, 100.0, 20.0, 2200.0, 0.01, CL_LOGARITHMIC);
-        lowcut->flags = USE_TRANSPARENCY | FAST_REDRAW;
+        lowcut = add_knob(top, "LowCut", 370,335,60, 80);
+        float min_lc = get_min_lowcut(sampleRate, irLength);
+        set_adjustment(lowcut->adj, 100.0, 100.0, min_lc, 2200.0, 0.01, CL_LOGARITHMIC);
+        lowcut->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(lowcut, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
         lowcut->parent_struct = this;
         lowcut->func.value_changed_callback = set_lowcut;
@@ -98,19 +99,30 @@ public:
 
         Widget_t* smooth = add_knob(top, "Smooth", 510,335,60, 80);
         set_adjustment(smooth->adj, 0.5, 0.5, 0.0, 1.0, 0.01, CL_CONTINUOS);
-        smooth->flags = USE_TRANSPARENCY | FAST_REDRAW;
+        smooth->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(smooth, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
         smooth->parent_struct = this;
         smooth->func.value_changed_callback = set_smooth;
         smooth->func.button_release_callback = set;
 
-        Widget_t* save = add_xsave_file_button(top, 580, 345, 60, 20, "Save IR", " ", ".wav|.WAV");
+        Widget_t* irsize = add_my_combobox(top, "Ir size", 580, 335, 60, 20);
+        irsize->parent_struct = this;
+        combobox_add_entry(irsize,"1024");
+        combobox_add_entry(irsize,"2048");
+        combobox_add_entry(irsize,"4096");
+        combobox_add_entry(irsize,"8192");
+        combobox_add_entry(irsize,"16384");
+        combobox_set_active_entry(irsize, 1);
+        irsize->func.value_changed_callback = set_irsize;
+        add_tooltip(irsize->childlist->childs[0], "Set Ir length");
+
+        Widget_t* save = add_xsave_file_button(top, 580, 365, 60, 20, "Save IR", " ", ".wav|.WAV");
         save->flags = USE_TRANSPARENCY | FAST_REDRAW;
         save->parent_struct = this;
         save->func.user_callback = save_response;
 
-        Widget_t* quit = add_my_button(top, 580, 380, 60, 20, "Quit");
-        quit->flags = USE_TRANSPARENCY | FAST_REDRAW;
+        Widget_t* quit = add_my_button(top, 580, 395, 60, 20, "Quit");
+        quit->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         quit->parent_struct = this;
         quit->func.value_changed_callback = quit_response;
 
@@ -124,6 +136,7 @@ private:
     Widget_t* ref_label = nullptr;
     Widget_t* src_label = nullptr;
     Widget_t* spec = nullptr;
+    Widget_t* lowcut = nullptr;
     IRProcessor *ip;
     AudioFile af;
     Vec ref_;
@@ -131,6 +144,8 @@ private:
     Vec diff_;
     Vec ir_;
     std::string ir_file;
+    size_t irLength = 2048;
+    double sampleRate = 48000.0;
 
     const float f_min = 20.0f;
     const float f_max = 20000.0f;
@@ -164,6 +179,39 @@ private:
         self->ip->setSmooth((double)adj_get_value(w->adj));
     }
 
+    static void set_irsize(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        int v = (int)adj_get_value(w->adj);
+        switch (v) {
+            case 0: self->irLength = 1024;
+            break;
+            case 1: self->irLength = 2048;
+            break;
+            case 2: self->irLength = 4096;
+            break;
+            case 3: self->irLength = 8192;
+            break;
+            case 4: self->irLength = 16384;
+            break;
+            default : self->irLength = 2048;
+            break;
+        }
+        // adjust minimum lowcut val
+        float min_lc = self->get_min_lowcut(self->sampleRate, self->irLength);
+        float lc = adj_get_value(self->lowcut->adj);
+        float val = std::max<float>(lc, min_lc);
+        set_adjustment(self->lowcut->adj, 100.0, val, min_lc, 2200.0, 0.01, CL_LOGARITHMIC);
+        self->ip->setLowCut((double)adj_get_value(self->lowcut->adj));
+        // recompute spectrum with new size
+        self->ip->computeIR(self->dstf, self->srcf, self->sampleRate, self->irLength);
+        self->setData(self->ip->getRefMag(), self->ip->getSrcMag(), 
+                        self->ip->getDiffMag(), self->ip->getIRMag());
+        // show results
+        expose_widget(self->lowcut);
+        expose_widget(self->spec);
+    }
+
     static void set(void *w_, void *event, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
@@ -180,12 +228,12 @@ private:
             self->ref_file = *(const char**)user_data;
             self->ref_label->label = self->ref_file.data();
             expose_widget(self->ref_label);
-            if ( self->af.getAudioFile(self->ref_file.c_str(), 48000) ) {
+            if ( self->af.getAudioFile(self->ref_file.c_str(), self->sampleRate) ) {
                 self->dstf.clear();
                 for (uint32_t i = 0; i < self->af.samplesize; i++) {
                     self->dstf.push_back((double)self->af.samples[i]);
                 }
-                self->ip->computeIR(self->dstf, self->srcf, 48000, 2048);
+                self->ip->computeIR(self->dstf, self->srcf, self->sampleRate, self->irLength);
                 self->setData(self->ip->getRefMag(), self->ip->getSrcMag(), 
                                 self->ip->getDiffMag(), self->ip->getIRMag());
                 expose_widget(self->spec);
@@ -200,12 +248,12 @@ private:
             self->src_file = *(const char**)user_data;
             self->src_label->label = self->src_file.data();
             expose_widget(self->src_label);
-            if ( self->af.getAudioFile(self->src_file.c_str(), 48000) ) {
+            if ( self->af.getAudioFile(self->src_file.c_str(), self->sampleRate) ) {
                 self->srcf.clear();
                 for (uint32_t i = 0; i < self->af.samplesize; i++) {
                     self->srcf.push_back((double)self->af.samples[i]);
                 }
-                self->ip->computeIR(self->dstf, self->srcf, 48000, 2048);
+                self->ip->computeIR(self->dstf, self->srcf, self->sampleRate, self->irLength);
                 self->setData(self->ip->getRefMag(), self->ip->getSrcMag(),
                                 self->ip->getDiffMag(), self->ip->getIRMag());
                 expose_widget(self->spec);
@@ -219,12 +267,17 @@ private:
         if(user_data !=NULL) {
             self->ir_file = *(const char**)user_data;
             std::vector<double> ir = self->ip->createIR();
-            self->af.saveAudioFile(self->ir_file, ir, ir.size(), 48000);
+            self->af.saveAudioFile(self->ir_file, ir, ir.size(), self->sampleRate);
             std::cout << "save as: " << self->ir_file << std::endl;
         }
     }
 
     // Helpers
+    float get_min_lowcut(float sr, size_t ir_len) {
+        float fmin = sr / (float)ir_len;
+        return std::max<float>(20.0f,fmin * 1.5f);
+    }
+
     static float clampf(float x, float lo, float hi) {
         return (x < lo) ? lo : (x > hi) ? hi : x;
     }
@@ -276,7 +329,7 @@ private:
         const int width  = m.width;
         const int height = m.height;
 
-        const float sample_rate = 48000.0f;
+        const float sample_rate = sampleRate;
 
         cairo_set_source_rgb(cr, 0.188, 0.188, 0.188);
         cairo_rectangle(cr, 0, 0, width, height);

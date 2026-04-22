@@ -27,7 +27,7 @@ public:
 
     void computeIR(const Vec& reference, const Vec& source, double sampleRate_,
                    size_t irLength_ = 2048, size_t fftSize = 0) {
-        sampleRate = sampleRate;
+        sampleRate = sampleRate_;
         irLength = irLength_;
         n = (fftSize > 0) ? fftSize : next_pow2(std::max<size_t>(reference.size(), source.size()));
         n = std::max<size_t>(n, irLength * 2);
@@ -75,6 +75,8 @@ public:
         apply_high_rolloff(mag_ir_, sampleRate, highcut);
         Vec smooth = adaptive_log_smooth(mag_ir_, sampleRate);
         mag_ir_ = lerpv(mag_ir_, smooth, smooth_amount);
+        //mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
+        //mag_ir_ = soften_peaks(mag_ir_, 0.2);
 
         Vec ir_ = createIR();
         CVec c(n);
@@ -167,6 +169,10 @@ public:
 
     void setSmooth(double sc) {
         smooth_amount = sc;
+    }
+
+    void setIrLength(size_t length) {
+        irLength = length;
     }
 
 private:

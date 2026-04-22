@@ -21,10 +21,35 @@ The result is an IR that works very well for creative applications (e.g. guitars
 ## Features
 
 * Spectral matching (Reference vs. Source)
-* Minimum-phase IR generation
+* Minimum-phase IR generation with adjustable IR length
 * Controllable low-/high-end rolloff
 * “Smooth” control for musical smoothing
 * Stable, deterministic results (no heuristic surprises)
+
+---
+
+### IR Length
+
+The **IR length** defines the duration of the generated impulse response and directly affects both frequency resolution and low-frequency accuracy.
+
+* **Longer IRs** provide better resolution at low frequencies and allow for more accurate spectral matching, especially in the bass range.
+* **Shorter IRs** reduce latency and CPU usage, but may introduce artifacts or instability at very low frequencies.
+
+As a rule of thumb, the lowest reliably representable frequency is approximately:
+
+```
+f_min ≈ sampleRate / IR_length
+```
+
+For stable results, the effective low-frequency processing range should stay above this limit.
+
+In practice:
+
+* 2048 samples → suitable down to ~40–50 Hz
+* 4096 samples → suitable down to ~25–30 Hz
+* 8192+ samples → recommended for deep low-end processing
+
+Frequencies below ~20 Hz are generally ignored, as they provide little practical value and can introduce numerical instability.
 
 ---
 
@@ -98,6 +123,27 @@ An interesting use case:
 * Application: Guitar  
 
 → results in an IR with an unusual but musical character
+
+---
+
+### Dependencies
+
+SmoothIR relies on a small set of widely available libraries:
+
+* **X11** – windowing and basic system interaction (Linux)
+* **cairo** – 2D graphics rendering for the UI
+* **libsndfile** – reading and writing audio files
+* **FFTW3** – fast Fourier transforms for spectral processing
+
+#### Install (Debian/Ubuntu)
+
+```bash
+sudo apt install libx11-dev libcairo2-dev libsndfile1-dev libfftw3-dev
+```
+
+#### Build
+
+Make sure all dependencies are installed, then compile using your preferred build system or compiler.
 
 ---
 

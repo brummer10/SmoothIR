@@ -251,3 +251,52 @@ Widget_t *add_my_button(Widget_t *parent, int x, int y, int width, int height, c
     fbutton->func.expose_callback = draw_i_button;
     return fbutton;
 }
+
+
+static void null_callback(void *w_, void *user_data) {
+    
+}
+
+static void dummy_callback(void *w_, void *button, void *user_data) {
+    
+}
+
+static void draw_my_combobox(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    if (!w) return;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    if (!metrics.visible) return;
+    int v = (int)adj_get_value(w->adj);
+    int vl = v - (int) w->adj->min_value;
+   // if (v<0) return;
+    Widget_t * menu = w->childlist->childs[1];
+    Widget_t* view_port =  menu->childlist->childs[0];
+    ComboBox_t *comboboxlist = (ComboBox_t*)view_port->parent_struct;
+
+    char label[32];
+    memset(label, '\0', sizeof(char)*32);
+    cairo_text_extents_t extents_f;
+    cairo_set_font_size (w->crb, w->app->normal_font);
+    if (w->state) cairo_set_font_size (w->crb, w->app->normal_font+2);
+    widget_set_scale(w);
+    strcpy(label, comboboxlist->list_names[vl]);
+    use_text_color_scheme(w, get_color_state(w));
+    cairo_text_extents(w->crb, label, &extents_f);
+    double twf = extents_f.width/2.0;
+    cairo_move_to (w->crb, max(5 * w->app->hdpi,(w->scale.init_width*0.5)-twf), (w->scale.init_height - extents_f.height*0.5)  * w->app->hdpi );
+    cairo_show_text(w->crb, label);
+    widget_reset_scale(w);
+
+}
+
+Widget_t* add_my_combobox(Widget_t *p,const char * label,
+                                int x, int y, int width, int height) {
+    Widget_t* w = add_combobox(p, label, x, y, width, height);
+    w->func.expose_callback = draw_my_combobox;
+    w->childlist->childs[0]->func.expose_callback = null_callback;
+    w->childlist->childs[0]->func.button_release_callback = dummy_callback;
+    //destroy_widget(w->childlist->childs[0], w->app);
+    //w->func.value_changed_callback = value_changed;
+    return w;
+}
