@@ -134,11 +134,12 @@ SmoothIR relies on a small set of widely available libraries:
 * **cairo** – 2D graphics rendering for the UI
 * **libsndfile** – reading and writing audio files
 * **FFTW3** – fast Fourier transforms for spectral processing
+* **jackd** – Jack Audio Connection Kit for audio processing
 
 #### Install (Debian/Ubuntu)
 
 ```bash
-sudo apt install libx11-dev libcairo2-dev libsndfile1-dev libfftw3-dev
+sudo apt install libx11-dev libcairo2-dev libsndfile1-dev libfftw3-dev libjack-jackd2-dev
 ```
 
 #### Build

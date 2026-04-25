@@ -20,16 +20,26 @@
 #include "CmdParser.h"
 #include "AudioFile.h"
 #include "IrMatch.h"
+#include "IrMorpher.h"
+
+IRMorpher conv;
+
 #include "SpectrumViewer.h"
+
+IRProcessor ip;
+SpectrumViewer sw(&ip);
+
+#include "jack.cc"
+
 
 int main(int argc, char *argv[]){
 
     CmdParser cmd;
     AudioFile af;
-    IRProcessor ip;
-    SpectrumViewer sw(&ip);
     std::vector<double> srcf;
     std::vector<double> dstf;
+
+    startJack();
 
     if (!cmd.parseCmdLine(argc, argv)) {
         cmd.printUsage(argv[0]);
@@ -40,23 +50,29 @@ int main(int argc, char *argv[]){
     std::string dst = cmd.opt.dst.value_or("");
 
     if(!src.empty()) {
-        if (! af.getAudioFile(src.c_str(), 48000) ) return 1;
+        if (! af.getAudioFile(src.c_str(), sw.getSampleRate()) ) return 1;
         for (uint32_t i = 0; i < af.samplesize; i++) {
             srcf.push_back((double)af.samples[i]);
         }
         sw.setSource(srcf,src);
     }
     if(!dst.empty()) {
-        if (! af.getAudioFile(dst.c_str(), 48000) ) return 1;
+        if (! af.getAudioFile(dst.c_str(), sw.getSampleRate()) ) return 1;
         for (uint32_t i = 0; i < af.samplesize; i++) {
             dstf.push_back((double)af.samples[i]);
         }
         sw.setRef(dstf,dst);
     }
 
-    ip.computeIR(dstf, srcf, 48000, 2048);
-    sw.setData(ip.getRefMag(), ip.getSrcMag(), ip.getDiffMag(), ip.getIRMag());
+    ip.computeIR(dstf, srcf, 48000, 2048, true);
+    //sw.setData(ip.getRefMag(), ip.getSrcMag(), ip.getDiffMag(), ip.getIRMag());
+
+    if(!src.empty() && !dst.empty()) {
+        //conv.init(ip.createIR());
+    }
+    
     sw.show();
+    quitJack();
 
     printf("bye bye\n");
     return 0;

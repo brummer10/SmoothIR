@@ -124,6 +124,7 @@ void draw_i_button(void *w_, void* user_data) {
     //int height = metrics.height-5;
     if (!metrics.visible) return;
     float offset = 0.0;
+    float g = 0.0;
     if(w->state==1 && ! (int)w->adj_y->value) {
         offset = 2.0;
     } else if(w->state==1) {
@@ -133,10 +134,11 @@ void draw_i_button(void *w_, void* user_data) {
     } else if(w->state==3) {
         offset = 2.0;
     }
+    if(w->adj_y->value) g = -0.5;
     widget_set_scale(w);
     cairo_text_extents_t extents_f;
     cairo_set_font_size (w->crb, w->app->normal_font + 1 + offset);
-    cairo_set_source_rgb(w->crb, 0.91, 0.949, 0.883);
+    cairo_set_source_rgb(w->crb, 0.91, 0.949 + g, 0.883 + g);
     cairo_text_extents(w->crb, w->label, &extents_f);
     double twf = extents_f.width/2.0;
     cairo_move_to (w->crb, max(5 * w->app->hdpi,(w->scale.init_width*0.5)-twf), (w->scale.init_height - extents_f.height*0.5)  * w->app->hdpi );
@@ -247,6 +249,13 @@ Widget_t *add_xsave_file_button(Widget_t *parent, int x, int y, int width, int h
 
 Widget_t *add_my_button(Widget_t *parent, int x, int y, int width, int height, const char *label) {
     Widget_t *fbutton = add_button(parent, label, x, y, width, height);
+    fbutton->scale.gravity = ASPECT;
+    fbutton->func.expose_callback = draw_i_button;
+    return fbutton;
+}
+
+Widget_t *add_my_toggle_button(Widget_t *parent, int x, int y, int width, int height, const char *label) {
+    Widget_t *fbutton = add_toggle_button(parent, label, x, y, width, height);
     fbutton->scale.gravity = ASPECT;
     fbutton->func.expose_callback = draw_i_button;
     return fbutton;

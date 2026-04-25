@@ -91,14 +91,14 @@ endif
 	GUI_LDFLAGS += -I$(HEADER_DIR) -Wl,-Bstatic -L. $(UI_LIB) \
 	-Wl,-Bdynamic `pkg-config --cflags --libs cairo x11` 
 
-	CFLAGS += -Wall -funroll-loops `$(PKGCONFIG) $(PKGCONFIG_FLAGS) --cflags sndfile fftw3 `\
+	CFLAGS += -Wall -funroll-loops `$(PKGCONFIG) $(PKGCONFIG_FLAGS) --cflags sndfile fftw3 jack `\
 	-ffast-math -fomit-frame-pointer -fstrength-reduce -fdata-sections \
 	-pthread $(SSE_CFLAGS)
 
 	CXXFLAGS += -MMD -std=c++17 -fno-math-errno -fno-trapping-math -fPIC -D_OS_UNIX_ -DALVER=\"$(VER)\" $(CFLAGS)
 
 	LDFLAGS += $(INCLUDES) -lm -pthread -lpthread -lstdc++ $(GUI_LDFLAGS) \
-	`$(PKGCONFIG) $(PKGCONFIG_FLAGS) --libs sndfile fftw3 `
+	`$(PKGCONFIG) $(PKGCONFIG_FLAGS) --libs sndfile fftw3 jack `
 	ifneq ($(MACOS)$(WINDOWS),true)
 		LDFLAGS += -lrt -lc
 	endif

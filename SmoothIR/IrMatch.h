@@ -13,6 +13,8 @@
 #include <vector>
 #include <complex>
 #include <cmath>
+#include <thread>
+#include <atomic>
 #include <fftw3.h>
 
 
@@ -22,59 +24,33 @@ public:
     using CVec = std::vector<Complex>;
     using Vec  = std::vector<double>;
 
+    ~IRProcessor() {
+        stopWorker();
+    }
+
+    std::atomic<bool> workerReady {false};
+    std::atomic<bool> workerBusy {false};
     static constexpr double EPS = 1e-12;
     size_t irLength = 2048;
 
     void computeIR(const Vec& reference, const Vec& source, double sampleRate_,
-                   size_t irLength_ = 2048, size_t fftSize = 0) {
+                   size_t irLength_ = 2048, bool rebuild = false, size_t fftSize = 0) {
         sampleRate = sampleRate_;
         irLength = irLength_;
         n = (fftSize > 0) ? fftSize : next_pow2(std::max<size_t>(reference.size(), source.size()));
         n = std::max<size_t>(n, irLength * 2);
-
-        CVec a(n), b(n);
-
-        for (size_t i = 0; i < reference.size(); ++i)
-            a[i] = reference[i];
-
-        for (size_t i = 0; i < source.size(); ++i)
-            b[i] = source[i];
-
-        CVec f1 = fft(a);
-        CVec f2 = fft(b);
-
-        CVec H = safe_divide(f1, f2);
-
-        last_diff_ = magnitude_db(H);
-        last_diff_ = adaptive_log_smooth(last_diff_, sampleRate);
-        last_diff_ = soften_peaks(last_diff_, 0.2);
-        last_diff_ = harmonic_refine(last_diff_, sampleRate);
-
-        last_ref_ = magnitude_db(f1);
-        last_ref_ = adaptive_log_smooth(last_ref_, sampleRate);
-        last_src_ = magnitude_db(f2);
-        last_src_ = adaptive_log_smooth(last_src_, sampleRate);
-
-        // normalise dB
-        peak = 0.0; // reset
-        peak = std::max(
-            *std::max_element(last_ref_.begin(), last_ref_.end()),
-            *std::max_element(last_src_.begin(), last_src_.end())
-        );
-        for (auto& v : last_ref_) v -= peak;
-        for (auto& v : last_src_) v -= peak;
-        peak =  std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
-        for (auto& v : last_diff_) v -= peak;
-
-        aplayFilter();
+        updateIR(reference, source, rebuild);
     }
 
     void aplayFilter() {
+        if (!last_diff_.size()) return;
         mag_ir_.assign(last_diff_.begin(), last_diff_.end());
         apply_low_rolloff(mag_ir_, sampleRate, lowcut);
         apply_high_rolloff(mag_ir_, sampleRate, highcut);
         Vec smooth = adaptive_log_smooth(mag_ir_, sampleRate);
         mag_ir_ = lerpv(mag_ir_, smooth, smooth_amount);
+        mag_ir_ = spectral_dynamics(mag_ir_, dynamics_amount, tilt_amount, sampleRate);
+        //mag_ir_ = adaptive_log_smooth(mag_ir_, sampleRate * 0.001);
         //mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
         //mag_ir_ = soften_peaks(mag_ir_, 0.2);
 
@@ -171,6 +147,14 @@ public:
         smooth_amount = sc;
     }
 
+    void setDynamics(double cc) {
+        dynamics_amount = cc;
+    }
+
+    void setTilt(double tc) {
+        tilt_amount = tc;
+    }
+
     void setIrLength(size_t length) {
         irLength = length;
     }
@@ -184,8 +168,67 @@ private:
     double peak = 0.0;
     double lowcut = 100.0;
     double highcut = 4000.0;
-    double smooth_amount = 0.5;
+    double smooth_amount = 0.3;
+    double dynamics_amount = 0.0;
+    double tilt_amount = 0.0;
     double sampleRate = 48000.0;
+
+    std::thread workerThread;
+
+    void stopWorker() {
+        if (workerThread.joinable())
+            workerThread.join();
+    }
+
+    void updateIR(const Vec& reference, const Vec& source, bool rebuild) {
+        workerBusy = true;
+        workerReady = false;
+
+        if (workerThread.joinable())
+            workerThread.join();
+    
+        workerThread = std::thread([this, reference, source, rebuild]() {
+            if (rebuild) {
+                CVec a(n), b(n);
+
+                for (size_t i = 0; i < reference.size(); ++i)
+                    a[i] = reference[i];
+
+                for (size_t i = 0; i < source.size(); ++i)
+                    b[i] = source[i];
+
+                CVec f1 = fft(a);
+                CVec f2 = fft(b);
+
+                CVec H = safe_divide(f1, f2);
+
+                last_diff_ = magnitude_db(H);
+                last_diff_ = adaptive_log_smooth(last_diff_, sampleRate);
+                last_diff_ = soften_peaks(last_diff_, 0.2);
+                last_diff_ = harmonic_refine(last_diff_, sampleRate);
+
+                last_ref_ = magnitude_db(f1);
+                last_ref_ = adaptive_log_smooth(last_ref_, sampleRate);
+                last_src_ = magnitude_db(f2);
+                last_src_ = adaptive_log_smooth(last_src_, sampleRate);
+
+                // normalise dB
+                peak = 0.0; // reset
+                peak = std::max(
+                    *std::max_element(last_ref_.begin(), last_ref_.end()),
+                    *std::max_element(last_src_.begin(), last_src_.end())
+                );
+                for (auto& v : last_ref_) v -= peak;
+                for (auto& v : last_src_) v -= peak;
+                peak =  std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
+                for (auto& v : last_diff_) v -= peak;
+            }
+            aplayFilter();
+
+            workerReady = true;
+            workerBusy = false;
+        });
+    }
 
     static Vec lerpv(const Vec& a, const Vec& b, double t) {
         size_t n = a.size();
@@ -322,6 +365,31 @@ private:
             if (excess > 0.0)
                 out[i] = mag[i] - excess * amount;
         }
+        return out;
+    }
+
+    Vec spectral_dynamics(const Vec& mag, double amount, double tilt, double sr) {
+        Vec smooth = adaptive_log_smooth(mag, sr);
+        Vec out = mag;
+        const double nyquist = sr * 0.5;
+        const double max_boost = 12.0;
+
+        for (size_t i = 0; i < mag.size(); ++i) {
+            double d = mag[i] - smooth[i];
+            double factor = std::pow(2.0, amount);
+            double freq = (double)i / (n - 1) * nyquist;
+            double norm = std::log(freq / 20.0) / std::log(nyquist / 20.0);
+            norm = std::clamp(norm, 0.0, 1.0);
+            double centered = (norm - 0.5) * 2.0;
+            double weight = 1.0 + tilt * std::tanh(centered);
+            if (freq < 40.0) weight *= 0.5;
+            weight = std::clamp(weight, 0.0, 2.0);
+            double delta = d * factor * weight;
+            delta = std::tanh(delta / max_boost) * max_boost;
+            out[i] = smooth[i] + delta;
+        }
+        // dc block
+        if (mag.size() > 1) out[0] = out[1];
         return out;
     }
 

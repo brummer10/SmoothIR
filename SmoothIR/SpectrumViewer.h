@@ -13,6 +13,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <atomic>
 #include "AudioFile.h"
 #include "xwidgets.h"
 #include "widgets.cc"
@@ -51,7 +52,7 @@ public:
         ir_.assign(ir.begin(), ir.end());
     }
 
-    void show(int width = 660, int height = 420) {
+    void show(int width = 800, int height = 420) {
         Xputty main;
         main_init(&main);
 
@@ -66,19 +67,24 @@ public:
         spec->parent_struct = this;
         spec->func.expose_callback = draw_callback;
 
-        Widget_t* ref = add_my_file_button(top, 10, 345, 90, 20, "Reference:", " ", ".wav|.WAV");
+        Widget_t* ref = add_my_file_button(top, 10, 335, 90, 20, "Reference:", " ", ".wav|.WAV");
         ref->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         ref->parent_struct = this;
         ref->func.user_callback = ref_load_response;
-        ref_label = add_my_label(top, "",100,347,260,20);
+        ref_label = add_my_label(top, "",100,337,260,20);
         ref_label->label = ref_file.data();
 
-        Widget_t* src = add_my_file_button(top, 10, 380, 90, 20, "Source:", " ", ".wav|.WAV");
+        Widget_t* src = add_my_file_button(top, 10, 365, 90, 20, "Source:", " ", ".wav|.WAV");
         src->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         src->parent_struct = this;
         src->func.user_callback = src_load_response;
-        src_label = add_my_label(top, "",100,382,260,20);
+        src_label = add_my_label(top, "",100,367,260,20);
         src_label->label = src_file.data();
+
+        Widget_t* save = add_xsave_file_button(top, 10, 395, 90, 20, "Save IR", " ", ".wav|.WAV");
+        save->flags = USE_TRANSPARENCY | FAST_REDRAW;
+        save->parent_struct = this;
+        save->func.user_callback = save_response;
 
         lowcut = add_knob(top, "LowCut", 370,335,60, 80);
         float min_lc = get_min_lowcut(sampleRate, irLength);
@@ -98,14 +104,30 @@ public:
         highcut->func.button_release_callback = set;
 
         Widget_t* smooth = add_knob(top, "Smooth", 510,335,60, 80);
-        set_adjustment(smooth->adj, 0.5, 0.5, 0.0, 1.0, 0.01, CL_CONTINUOS);
+        set_adjustment(smooth->adj, 0.3, 0.3, 0.0, 1.0, 0.01, CL_CONTINUOS);
         smooth->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(smooth, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
         smooth->parent_struct = this;
         smooth->func.value_changed_callback = set_smooth;
         smooth->func.button_release_callback = set;
 
-        Widget_t* irsize = add_my_combobox(top, "Ir size", 580, 335, 60, 20);
+        Widget_t* dynamics = add_knob(top, "Dynamics", 580,335,60, 80);
+        set_adjustment(dynamics->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
+        dynamics->flags |= USE_TRANSPARENCY | FAST_REDRAW;
+        set_widget_color(dynamics, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
+        dynamics->parent_struct = this;
+        dynamics->func.value_changed_callback = set_dynamics;
+        dynamics->func.button_release_callback = set;
+
+        Widget_t* tilt = add_knob(top, "Tone Bias", 650,335,60, 80);
+        set_adjustment(tilt->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
+        tilt->flags |= USE_TRANSPARENCY | FAST_REDRAW;
+        set_widget_color(tilt, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
+        tilt->parent_struct = this;
+        tilt->func.value_changed_callback = set_tilt;
+        tilt->func.button_release_callback = set;
+
+        Widget_t* irsize = add_my_combobox(top, "Ir size", 720, 335, 60, 20);
         irsize->parent_struct = this;
         combobox_add_entry(irsize,"1024");
         combobox_add_entry(irsize,"2048");
@@ -114,21 +136,51 @@ public:
         combobox_add_entry(irsize,"16384");
         combobox_set_active_entry(irsize, 1);
         irsize->func.value_changed_callback = set_irsize;
-        add_tooltip(irsize->childlist->childs[0], "Set Ir length");
+        add_tooltip(irsize->childlist->childs[0], "Ir length");
 
-        Widget_t* save = add_xsave_file_button(top, 580, 365, 60, 20, "Save IR", " ", ".wav|.WAV");
-        save->flags = USE_TRANSPARENCY | FAST_REDRAW;
-        save->parent_struct = this;
-        save->func.user_callback = save_response;
+        Widget_t* bp = add_my_toggle_button(top, 720, 365, 60, 20, "Bypass");
+        bp->flags |= USE_TRANSPARENCY | FAST_REDRAW;
+        bp->parent_struct = this;
+        bp->func.value_changed_callback = bp_response;
 
-        Widget_t* quit = add_my_button(top, 580, 395, 60, 20, "Quit");
+        Widget_t* quit = add_my_button(top, 720, 395, 60, 20, "Quit");
         quit->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         quit->parent_struct = this;
         quit->func.value_changed_callback = quit_response;
 
         widget_show_all(top);
-        main_run(&main);
+
+        Atom WM_DELETE_WINDOW = os_register_wm_delete_window(top);
+        run = true;
+        int check = 1;
+        while (run) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            check ^= 1;
+            XEvent xev;
+            if (XCheckTypedWindowEvent(main.dpy, top->widget, ClientMessage, &xev)){
+                if (xev.xclient.data.l[0] == (long int)WM_DELETE_WINDOW) {
+                    quitGui();
+                }
+            }
+            if (check) check_leak();
+            check_irmatch();
+            os_run_embedded(&main);
+        }
+
         main_quit(&main);
+    }
+
+    void setSampleRate(const double sr) {
+        sampleRate = sr;
+    }
+
+    const double getSampleRate() {
+        return sampleRate;
+    }
+
+    void quitGui() {
+        run = false;
+        destroy_widget(top, top->app);
     }
 
 private:
@@ -146,19 +198,45 @@ private:
     std::string ir_file;
     size_t irLength = 2048;
     double sampleRate = 48000.0;
+    bool run = false;
+    std::atomic<bool> set_leak {false};
 
     const float f_min = 20.0f;
     const float f_max = 20000.0f;
     const float db_min = -108.0f;
     const float db_max = 6.0f;
 
+    void check_leak() {
+        if (set_leak.load(std::memory_order_acquire) &&
+                !ip->workerBusy.load(std::memory_order_acquire)) {
+            set_leak.store(false, std::memory_order_release);
+            ip->computeIR(dstf, srcf, sampleRate, irLength, false);
+        }
+    }
+
+    void check_irmatch() {
+        if (ip->workerReady.load(std::memory_order_acquire)) {
+            ip->workerReady.store(false, std::memory_order_release);
+            setData(ip->getRefMag(), ip->getSrcMag(), 
+                            ip->getDiffMag(), ip->getIRMag());
+            conv.setIR(ip->createIR());
+            expose_widget(spec);
+        }
+    }
+
     // Callbacks
     static void quit_response(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         if (w->flags & HAS_POINTER && !adj_get_value(w->adj)){
+            self->run = false;
             destroy_widget(self->top, self->top->app);
         }
+    }
+
+    static void bp_response(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        conv.setBypass((int)adj_get_value(w->adj));
     }
 
     static void set_lowcut(void *w_, void* user_data) {
@@ -177,6 +255,22 @@ private:
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         self->ip->setSmooth((double)adj_get_value(w->adj));
+    }
+
+    static void set_dynamics(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setDynamics((double)adj_get_value(w->adj));
+    }
+
+    static void set_tilt(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setTilt((double)adj_get_value(w->adj));
+    }
+
+    void comput_and_set() {
+        ip->computeIR(dstf, srcf, sampleRate, irLength, true);
     }
 
     static void set_irsize(void *w_, void* user_data) {
@@ -203,22 +297,15 @@ private:
         float val = std::max<float>(lc, min_lc);
         set_adjustment(self->lowcut->adj, 100.0, val, min_lc, 2200.0, 0.01, CL_LOGARITHMIC);
         self->ip->setLowCut((double)adj_get_value(self->lowcut->adj));
-        // recompute spectrum with new size
-        self->ip->computeIR(self->dstf, self->srcf, self->sampleRate, self->irLength);
-        self->setData(self->ip->getRefMag(), self->ip->getSrcMag(), 
-                        self->ip->getDiffMag(), self->ip->getIRMag());
-        // show results
         expose_widget(self->lowcut);
-        expose_widget(self->spec);
+        // recompute spectrum with new size
+        self->comput_and_set();
     }
 
     static void set(void *w_, void *event, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->aplayFilter();
-        self->setData(self->ip->getRefMag(), self->ip->getSrcMag(), 
-                        self->ip->getDiffMag(), self->ip->getIRMag());
-        expose_widget(self->spec);
+        self->set_leak.store(true, std::memory_order_release);
     }
 
     static void ref_load_response(void *w_, void* user_data) {
@@ -233,10 +320,7 @@ private:
                 for (uint32_t i = 0; i < self->af.samplesize; i++) {
                     self->dstf.push_back((double)self->af.samples[i]);
                 }
-                self->ip->computeIR(self->dstf, self->srcf, self->sampleRate, self->irLength);
-                self->setData(self->ip->getRefMag(), self->ip->getSrcMag(), 
-                                self->ip->getDiffMag(), self->ip->getIRMag());
-                expose_widget(self->spec);
+                self->comput_and_set();
             }
         }
     }
@@ -253,10 +337,7 @@ private:
                 for (uint32_t i = 0; i < self->af.samplesize; i++) {
                     self->srcf.push_back((double)self->af.samples[i]);
                 }
-                self->ip->computeIR(self->dstf, self->srcf, self->sampleRate, self->irLength);
-                self->setData(self->ip->getRefMag(), self->ip->getSrcMag(),
-                                self->ip->getDiffMag(), self->ip->getIRMag());
-                expose_widget(self->spec);
+                self->comput_and_set();
             }
         }
     }
