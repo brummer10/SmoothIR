@@ -19,27 +19,30 @@
 
 #include "CmdParser.h"
 #include "AudioFile.h"
+#include "FFTAnalyzer.h"
 #include "IrMatch.h"
 #include "IrMorpher.h"
 
-IRMorpher conv;
 
 #include "SpectrumViewer.h"
 
-IRProcessor ip;
-SpectrumViewer sw(&ip);
-
-#include "jack.cc"
+#include "JackClient.h"
 
 
 int main(int argc, char *argv[]){
 
     CmdParser cmd;
     AudioFile af;
+    FFTAnalyzer ana;
+    IRProcessor ip;
+    IRMorpher conv;
+    SpectrumViewer sw(&ip, &conv, &ana);
+    JackClient jack(&conv, &sw, &ana);
+
     std::vector<double> srcf;
     std::vector<double> dstf;
 
-    startJack();
+    jack.start();
 
     if (!cmd.parseCmdLine(argc, argv)) {
         cmd.printUsage(argv[0]);
@@ -64,15 +67,10 @@ int main(int argc, char *argv[]){
         sw.setRef(dstf,dst);
     }
 
-    ip.computeIR(dstf, srcf, 48000, 2048, true);
-    //sw.setData(ip.getRefMag(), ip.getSrcMag(), ip.getDiffMag(), ip.getIRMag());
+    ip.computeIR(dstf, srcf, 48000, 4096, true);
 
-    if(!src.empty() && !dst.empty()) {
-        //conv.init(ip.createIR());
-    }
-    
     sw.show();
-    quitJack();
+    jack.stop();
 
     printf("bye bye\n");
     return 0;

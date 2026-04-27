@@ -40,18 +40,7 @@ public:
         H_parts.resize(numParts);
         X_history.assign(numParts, std::vector<Complex>(N, 0.0));
 
-        fft_in.resize(N);
-        fft_out.resize(N);
-
-        plan_fwd = fftw_plan_dft_1d(N,
-            reinterpret_cast<fftw_complex*>(fft_in.data()),
-            reinterpret_cast<fftw_complex*>(fft_out.data()),
-            FFTW_FORWARD, FFTW_MEASURE);
-
-        plan_inv = fftw_plan_dft_1d(N,
-            reinterpret_cast<fftw_complex*>(fft_in.data()),
-            reinterpret_cast<fftw_complex*>(fft_out.data()),
-            FFTW_BACKWARD, FFTW_MEASURE);
+        ensureFFT();
 
         // Partition tail (offset = H)
         for (size_t p = 0; p < numParts; ++p) {
@@ -156,4 +145,23 @@ private:
 
     fftw_plan plan_fwd = nullptr;
     fftw_plan plan_inv = nullptr;
+
+    void ensureFFT() {
+        if (!plan_fwd) {
+
+            fft_in.assign(N, Complex(0.0, 0.0));
+            fft_out.assign(N, Complex(0.0, 0.0));
+
+            plan_fwd = fftw_plan_dft_1d(N,
+                reinterpret_cast<fftw_complex*>(fft_in.data()),
+                reinterpret_cast<fftw_complex*>(fft_out.data()),
+                FFTW_FORWARD, FFTW_MEASURE);
+
+            plan_inv = fftw_plan_dft_1d(N,
+                reinterpret_cast<fftw_complex*>(fft_in.data()),
+                reinterpret_cast<fftw_complex*>(fft_out.data()),
+                FFTW_BACKWARD, FFTW_MEASURE);
+        }
+    }
+
 };

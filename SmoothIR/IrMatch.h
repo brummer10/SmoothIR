@@ -17,6 +17,15 @@
 #include <atomic>
 #include <fftw3.h>
 
+struct Band {
+    enum Type {LowShelf = 0,  Peak = 1, HighShelf = 2 };
+
+    int enabled;
+    Type type;
+    double freq;
+    double gain;
+    double Q;
+};
 
 class IRProcessor {
 public:
@@ -28,25 +37,71 @@ public:
         stopWorker();
     }
 
+    Band bands[6] = {
+        // Low Shelf
+        {0, Band::LowShelf,  80.0,   0.0, 0.7 },
+        // Low-Mid
+        {0, Band::Peak,     150.0,   0.0, 1.0 },
+        // Mid 1
+        {0, Band::Peak,     500.0,   0.0, 1.0 },
+        // Mid 2
+        {0, Band::Peak,    1500.0,   0.0, 1.0 },
+        // High-Mid
+        {0, Band::Peak,    4500.0,   0.0, 1.0 },
+        // High Shelf
+        {0, Band::HighShelf, 10000.0, 0.0, 0.7 }
+    };
+
     std::atomic<bool> workerReady {false};
     std::atomic<bool> workerBusy {false};
     static constexpr double EPS = 1e-12;
     size_t irLength = 2048;
 
     void computeIR(const Vec& reference, const Vec& source, double sampleRate_,
-                   size_t irLength_ = 2048, bool rebuild = false, size_t fftSize = 0) {
+                   size_t irLength_ = 4096, bool rebuild = false, size_t fftSize = 0) {
         sampleRate = sampleRate_;
         irLength = irLength_;
-        n = (fftSize > 0) ? fftSize : next_pow2(std::max<size_t>(reference.size(), source.size()));
+        if (source.size()) haveSource = true;
+        if (reference.size()) haveReference = true;
+        size_t maxAnalysisSize = sampleRate * 4;
+        
+        Vec ref_trunc = center_crop(reference, maxAnalysisSize);
+        Vec src_trunc = center_crop(source, maxAnalysisSize);
+        
+        n = (fftSize > 0) ? fftSize : next_pow2(std::max<size_t>(ref_trunc.size(), src_trunc.size()));
         n = std::max<size_t>(n, irLength * 2);
-        updateIR(reference, source, rebuild);
+        updateIR(ref_trunc, src_trunc, rebuild);
     }
 
     void aplayFilter() {
         if (!last_diff_.size()) return;
         mag_ir_.assign(last_diff_.begin(), last_diff_.end());
-        apply_low_rolloff(mag_ir_, sampleRate, lowcut);
-        apply_high_rolloff(mag_ir_, sampleRate, highcut);
+        if(lowcut_enabled) {
+            apply_low_rolloff(mag_ir_, sampleRate, lowcut);
+        } else if (haveSource || haveReference) {
+            apply_low_rolloff(mag_ir_, sampleRate, 30.0);
+        }
+        if(highcut_enabled) apply_high_rolloff(mag_ir_, sampleRate, highcut);
+        
+        for (auto& b : bands) {
+            if (b.enabled) {
+                switch (b.type) {
+                    case Band::Peak:
+                        apply_peak(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
+                        break;
+
+                    case Band::LowShelf:
+                        apply_low_shelf(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
+                        break;
+
+                    case Band::HighShelf:
+                        apply_high_shelf(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
+                        break;
+                }
+            }
+        }
+        
+        //apply_peak(mag_ir_, sampleRate, 1000.0, -24.0, 1.0); // Q 0.0 - 5  
         Vec smooth = adaptive_log_smooth(mag_ir_, sampleRate);
         mag_ir_ = lerpv(mag_ir_, smooth, smooth_amount);
         mag_ir_ = spectral_dynamics(mag_ir_, dynamics_amount, tilt_amount, sampleRate);
@@ -63,7 +118,7 @@ public:
         mag_ir_.clear();
         mag_ir_ = magnitude_db(f3);
 
-        peak = std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
+        //peak = std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
         for (auto& v : mag_ir_) v -= peak;
     }
 
@@ -139,8 +194,16 @@ public:
         lowcut = lc;
     }
 
+    void setLowCutEnabled(int lc) {
+        lowcut_enabled = lc;
+    }
+
     void setHighCut(double hc) {
         highcut = hc;
+    }
+
+    void setHighCutEnabled(int hc) {
+        highcut_enabled = hc;
     }
 
     void setSmooth(double sc) {
@@ -159,12 +222,35 @@ public:
         irLength = length;
     }
 
+    void setFtype(int i, int ft) {
+        bands[i].type = (Band::Type)ft;
+    }
+
+    void setFreq(int i, double f) {
+        bands[i].freq = f;
+    }
+
+    void setFq(int i, double q) {
+        bands[i].Q = q;
+    }
+
+    void setFgain(int i, double g) {
+        bands[i].gain = g;
+    }
+
+    void setFenable(int i, int e) {
+        bands[i].enabled = e;
+    }
+
+
 private:
     Vec mag_ir_;
     Vec last_ref_;
     Vec last_src_;
     Vec last_diff_;
     size_t n = 0;
+    bool haveSource = false;
+    bool haveReference = false;
     double peak = 0.0;
     double lowcut = 100.0;
     double highcut = 4000.0;
@@ -172,8 +258,22 @@ private:
     double dynamics_amount = 0.0;
     double tilt_amount = 0.0;
     double sampleRate = 48000.0;
+    int lowcut_enabled = 0;
+    int highcut_enabled = 0;
 
     std::thread workerThread;
+
+    static Vec center_crop(const Vec& in, size_t size) {
+        if (in.size() <= size)
+            return in;
+
+        size_t start = (in.size() - size) / 2;
+        return Vec(in.begin() + start, in.begin() + start + size);
+    }
+
+    void make_flat(Vec& v, size_t bins, double db = 0.0) {
+        v.assign(bins, db);
+    }
 
     void stopWorker() {
         if (workerThread.joinable())
@@ -200,28 +300,40 @@ private:
                 CVec f1 = fft(a);
                 CVec f2 = fft(b);
 
-                CVec H = safe_divide(f1, f2);
+                if (haveSource && haveReference) {
+                    CVec H = safe_divide(f1, f2);
+                    last_diff_ = magnitude_db(H);
+                } else if (haveReference) {
+                    last_diff_ = magnitude_db(f1);
+                } else if (haveSource) {
+                    last_diff_ = magnitude_db(f2);
+                } else {
+                    make_flat(last_ref_, n / 2 + 1);
+                    make_flat(last_diff_, n / 2 + 1);
+                    make_flat(last_src_, n / 2 + 1);
+                }
 
-                last_diff_ = magnitude_db(H);
-                last_diff_ = adaptive_log_smooth(last_diff_, sampleRate);
-                last_diff_ = soften_peaks(last_diff_, 0.2);
-                last_diff_ = harmonic_refine(last_diff_, sampleRate);
+                if (haveSource || haveReference) {
+                    last_diff_ = adaptive_log_smooth(last_diff_, sampleRate);
+                    last_diff_ = soften_peaks(last_diff_, 0.2);
+                    last_diff_ = harmonic_refine(last_diff_, sampleRate);
 
-                last_ref_ = magnitude_db(f1);
-                last_ref_ = adaptive_log_smooth(last_ref_, sampleRate);
-                last_src_ = magnitude_db(f2);
-                last_src_ = adaptive_log_smooth(last_src_, sampleRate);
+                    last_ref_ = magnitude_db(f1);
+                    last_ref_ = adaptive_log_smooth(last_ref_, sampleRate);
+                    last_src_ = magnitude_db(f2);
+                    last_src_ = adaptive_log_smooth(last_src_, sampleRate);
 
-                // normalise dB
-                peak = 0.0; // reset
-                peak = std::max(
-                    *std::max_element(last_ref_.begin(), last_ref_.end()),
-                    *std::max_element(last_src_.begin(), last_src_.end())
-                );
-                for (auto& v : last_ref_) v -= peak;
-                for (auto& v : last_src_) v -= peak;
-                peak =  std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
-                for (auto& v : last_diff_) v -= peak;
+                    // normalise dB
+                    peak = 0.0; // reset
+                    peak = std::max(
+                        *std::max_element(last_ref_.begin(), last_ref_.end()),
+                        *std::max_element(last_src_.begin(), last_src_.end())
+                    );
+                    for (auto& v : last_ref_) v -= peak;
+                    for (auto& v : last_src_) v -= peak;
+                    //peak =  std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
+                    for (auto& v : last_diff_) v -= peak;
+                }
             }
             aplayFilter();
 
@@ -393,6 +505,72 @@ private:
         return out;
     }
 
+    static double mapQ(double q_ui) {
+        // clamp UI range
+        q_ui = std::clamp(q_ui, 0.1, 10.0);
+        // log-space mapping
+        double x = std::log(q_ui);
+        // soften curve
+        double shaped = std::tanh(x * 0.8);
+        // back to linear
+        double q = std::exp(shaped * 1.5);
+        return q;
+    }
+
+    static double q_to_sigma(double q) {
+        return 1.0 / (1.5 * q + 0.5);
+    }
+
+    static inline double log_distance(double f, double f0) {
+        return std::log2((f + 1e-9) / (f0 + 1e-9));
+    }
+
+    static void apply_peak(Vec& mag, double sr,
+                double freq, double gain_db, double Q_ui) {
+        size_t n = mag.size();
+        double nyquist = sr * 0.5;
+        double Q = mapQ(Q_ui);
+        double sigma = q_to_sigma(Q);
+
+        for (size_t i = 1; i < n; ++i) {
+            double f = (double)i / (n - 1) * nyquist;
+            if (f < 10.0) continue;
+            double x = std::log2((f + 1e-9) / (freq + 1e-9));
+            double g = std::exp(-0.5 * (x * x) / (sigma * sigma));
+            mag[i] += gain_db * g;
+        }
+    }
+
+    static void apply_low_shelf(Vec& mag, double sr,
+                    double freq, double gain_db, double Q) {
+        size_t n = mag.size();
+        double nyquist = sr * 0.5;
+        double slope = mapQ(Q) * 1.5;
+
+        for (size_t i = 1; i < n; ++i) {
+            double f = (double)i / (n - 1) * nyquist;
+            if (f < 10.0) continue;
+            double x = log_distance(f, freq);
+            double g = 0.5 * (1.0 - std::tanh(slope * x));
+            mag[i] += gain_db * g;
+        }
+    }
+
+    static void apply_high_shelf(Vec& mag, double sr,
+                    double freq, double gain_db, double Q) {
+        size_t n = mag.size();
+        double nyquist = sr * 0.5;
+        double slope = mapQ(Q) * 1.5;
+
+        for (size_t i = 1; i < n; ++i) {
+            double f = (double)i / (n - 1) * nyquist;
+            if (f < 10.0) continue;
+            double x = log_distance(f, freq);
+            double g = 0.5 * (1.0 + std::tanh(slope * x));
+            mag[i] += gain_db * g;
+        }
+    }
+
     static void apply_low_rolloff(Vec& mag, double sr, double cutoff, int order = 4) {
         size_t n = mag.size();
         double nyquist = sr * 0.5;
@@ -461,7 +639,7 @@ private:
         }
         // apply normalize factor and get gain factor
         if (peak != 0.0) {
-            peak = 0.8/peak;
+            peak = 1.0/peak;
             for (size_t i = 0; i < b.size(); i++) {
                b[i] *= peak;
                double v = b[i] ;

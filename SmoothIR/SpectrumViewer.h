@@ -17,6 +17,7 @@
 #include "AudioFile.h"
 #include "xwidgets.h"
 #include "widgets.cc"
+#include "EQController.h"
 
 class SpectrumViewer {
 public:
@@ -26,8 +27,10 @@ public:
     std::string ref_file;
     std::string src_file;
 
-    SpectrumViewer(IRProcessor *ip_) {
+    SpectrumViewer(IRProcessor *ip_, IRMorpher *conv_, FFTAnalyzer* ana_) {
         ip = ip_;
+        conv = conv_;
+        ana = ana_;
     }
 
     ~SpectrumViewer() {}
@@ -52,7 +55,7 @@ public:
         ir_.assign(ir.begin(), ir.end());
     }
 
-    void show(int width = 800, int height = 420) {
+    void show(int width = 800, int height = 520) {
         Xputty main;
         main_init(&main);
 
@@ -63,30 +66,99 @@ public:
         //top->flags = NO_PROPAGATE;
         top->func.expose_callback = draw_window;
 
-        spec = create_widget(&main, top,0, 0, width, height-90);
+        spec = create_widget(&main, top,0, 0, width, height-190);
+        XSelectInput(spec->app->dpy, spec->widget,StructureNotifyMask|ExposureMask|KeyPressMask 
+                    |EnterWindowMask|LeaveWindowMask|ButtonReleaseMask|KeyReleaseMask
+                    |ButtonPressMask|Button1MotionMask|PointerMotionMask);
+
         spec->parent_struct = this;
         spec->func.expose_callback = draw_callback;
+        spec->func.motion_callback = mouse_in_spec;
+        spec->func.button_release_callback = mouse_move_spec;
+        spec->func.button_press_callback = mouse_set_spec;
 
-        Widget_t* ref = add_my_file_button(top, 10, 335, 90, 20, "Reference:", " ", ".wav|.WAV");
+        int x = 1;
+        for (int i = 0; i<6; i++) {
+            frame[i] = add_my_frame(top,"", x, 331, 133, 100);
+
+            ftype[i] = add_type_combobox(frame[i], "Type", 10, 5, 95, 20);
+            ftype[i]->data = i;
+            ftype[i]->parent_struct = this;
+            combobox_add_entry(ftype[i],"Low Shelf");
+            combobox_add_entry(ftype[i],"Peak");
+            combobox_add_entry(ftype[i],"High Shelf");
+            if (i>0 && i<5) {
+                combobox_set_active_entry(ftype[i], 1);
+            } else if (i>=5) {
+                combobox_set_active_entry(ftype[i], 2);
+            } else {
+                combobox_set_active_entry(ftype[i], 0);
+            }
+            ftype[i]->func.value_changed_callback = set_ftype;
+
+            fenable[i] = add_my_enable_button(frame[i], 107, 5, 20, 20, "");
+            fenable[i]->data = i;
+            fenable[i]->parent_struct = this;
+            fenable[i]->func.value_changed_callback = set_fenable;
+            double r,g,bcol;
+            get_band_color(i, r, g, bcol);
+
+            set_widget_color(fenable[i], (Color_state)0, (Color_mod)0, r, g, bcol, 1.0);
+
+            freq[i] = add_my_knob(frame[i], "FREQ", "Hz", 6,37,42, 60);
+            freq[i]->data = i;
+            freq[i]->parent_struct = this;
+            freq[i]->func.value_changed_callback = set_freq;
+            freq[i]->func.button_release_callback = set;
+            if (i == 0) set_adjustment(freq[i]->adj, 80.0, 80.0, 20.0, 120.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 1) set_adjustment(freq[i]->adj, 150.0, 150.0, 80.0, 300.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 2) set_adjustment(freq[i]->adj, 500.0, 500.0, 250.0, 1000.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 3) set_adjustment(freq[i]->adj, 1500.0, 1500.0, 800.0, 3000.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 4) set_adjustment(freq[i]->adj, 4500.0, 4500.0, 2000.0, 8000.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 5) set_adjustment(freq[i]->adj, 10000.0, 10000.0, 6000.0, 20000.0, 0.01, CL_LOGARITHMIC);
+            
+
+            fq[i] = add_my_knob(frame[i], "Q", "", 48,37,42, 60);
+            fq[i]->data = i;
+            fq[i]->parent_struct = this;
+            fq[i]->func.value_changed_callback = set_fq;
+            fq[i]->func.button_release_callback = set;
+            if (i == 0) set_adjustment(fq[i]->adj, 0.7, 0.7, 0.4, 10.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 1) set_adjustment(fq[i]->adj, 1.0, 1.0, 0.5, 10.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 2) set_adjustment(fq[i]->adj, 1.0, 1.0, 0.5, 10.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 3) set_adjustment(fq[i]->adj, 1.2, 1.2, 0.7, 10.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 4) set_adjustment(fq[i]->adj, 1.4, 1.4, 0.8, 10.0, 0.01, CL_LOGARITHMIC);
+            else if (i == 5) set_adjustment(fq[i]->adj, 0.7, 0.7, 0.4, 10.0, 0.01, CL_LOGARITHMIC);
+
+            fgain[i] = add_my_knob(frame[i], "GAIN", "dB", 90,37,42, 60);
+            fgain[i]->data = i;
+            fgain[i]->parent_struct = this;
+            set_adjustment(fgain[i]->adj, 0.0, 0.0, -48.0, 24.0, 0.1, CL_CONTINUOS);
+            fgain[i]->func.value_changed_callback = set_fgain;
+            fgain[i]->func.button_release_callback = set;
+            x += 133;
+        }
+
+        Widget_t* ref = add_my_file_button(top, 10, 435, 90, 20, "Reference:", " ", ".wav|.WAV");
         ref->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         ref->parent_struct = this;
         ref->func.user_callback = ref_load_response;
-        ref_label = add_my_label(top, "",100,337,260,20);
+        ref_label = add_my_label(top, "",100,437,260,20);
         ref_label->label = ref_file.data();
 
-        Widget_t* src = add_my_file_button(top, 10, 365, 90, 20, "Source:", " ", ".wav|.WAV");
+        Widget_t* src = add_my_file_button(top, 10, 465, 90, 20, "Source:", " ", ".wav|.WAV");
         src->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         src->parent_struct = this;
         src->func.user_callback = src_load_response;
-        src_label = add_my_label(top, "",100,367,260,20);
+        src_label = add_my_label(top, "",100,467,260,20);
         src_label->label = src_file.data();
 
-        Widget_t* save = add_xsave_file_button(top, 10, 395, 90, 20, "Save IR", " ", ".wav|.WAV");
+        Widget_t* save = add_xsave_file_button(top, 10, 495, 90, 20, "Save IR", " ", ".wav|.WAV");
         save->flags = USE_TRANSPARENCY | FAST_REDRAW;
         save->parent_struct = this;
         save->func.user_callback = save_response;
 
-        lowcut = add_knob(top, "LowCut", 370,335,60, 80);
+        lowcut = add_my_knob(top, "LowCut", "Hz", 370,436,60, 80);
         float min_lc = get_min_lowcut(sampleRate, irLength);
         set_adjustment(lowcut->adj, 100.0, 100.0, min_lc, 2200.0, 0.01, CL_LOGARITHMIC);
         lowcut->flags |= USE_TRANSPARENCY | FAST_REDRAW;
@@ -95,7 +167,11 @@ public:
         lowcut->func.value_changed_callback = set_lowcut;
         lowcut->func.button_release_callback = set;
 
-        Widget_t* highcut = add_knob(top, "HighCut", 440,335,60, 80);
+        Widget_t* lcenable = add_my_enable_button(lowcut, 19, 15, 20, 20, "");
+        lcenable->parent_struct = this;
+        lcenable->func.value_changed_callback = set_lowcut_enable;
+
+        Widget_t* highcut = add_my_knob(top, "HighCut", "Hz", 440,436,60, 80);
         set_adjustment(highcut->adj, 4000.0, 4000.0, 110.0, 22000.0, 0.01, CL_LOGARITHMIC);
         highcut->flags = USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(highcut, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -103,7 +179,11 @@ public:
         highcut->func.value_changed_callback = set_highcut;
         highcut->func.button_release_callback = set;
 
-        Widget_t* smooth = add_knob(top, "Smooth", 510,335,60, 80);
+        Widget_t* hcenable = add_my_enable_button(highcut, 19, 15, 20, 20, "");
+        hcenable->parent_struct = this;
+        hcenable->func.value_changed_callback = set_highcut_enable;
+
+        Widget_t* smooth = add_knob(top, "Smooth", 510,435,60, 80);
         set_adjustment(smooth->adj, 0.3, 0.3, 0.0, 1.0, 0.01, CL_CONTINUOS);
         smooth->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(smooth, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -111,7 +191,7 @@ public:
         smooth->func.value_changed_callback = set_smooth;
         smooth->func.button_release_callback = set;
 
-        Widget_t* dynamics = add_knob(top, "Dynamics", 580,335,60, 80);
+        Widget_t* dynamics = add_knob(top, "Dynamics", 580,435,60, 80);
         set_adjustment(dynamics->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
         dynamics->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(dynamics, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -119,7 +199,7 @@ public:
         dynamics->func.value_changed_callback = set_dynamics;
         dynamics->func.button_release_callback = set;
 
-        Widget_t* tilt = add_knob(top, "Tone Bias", 650,335,60, 80);
+        Widget_t* tilt = add_knob(top, "Tone Bias", 650,435,60, 80);
         set_adjustment(tilt->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
         tilt->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(tilt, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -127,23 +207,23 @@ public:
         tilt->func.value_changed_callback = set_tilt;
         tilt->func.button_release_callback = set;
 
-        Widget_t* irsize = add_my_combobox(top, "Ir size", 720, 335, 60, 20);
+        Widget_t* irsize = add_my_combobox(top, "Ir size", 720, 435, 60, 20);
         irsize->parent_struct = this;
         combobox_add_entry(irsize,"1024");
         combobox_add_entry(irsize,"2048");
         combobox_add_entry(irsize,"4096");
         combobox_add_entry(irsize,"8192");
         combobox_add_entry(irsize,"16384");
-        combobox_set_active_entry(irsize, 1);
+        combobox_set_active_entry(irsize, 2);
         irsize->func.value_changed_callback = set_irsize;
         add_tooltip(irsize->childlist->childs[0], "Ir length");
 
-        Widget_t* bp = add_my_toggle_button(top, 720, 365, 60, 20, "Bypass");
+        Widget_t* bp = add_my_toggle_button(top, 720, 465, 60, 20, "Bypass");
         bp->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         bp->parent_struct = this;
         bp->func.value_changed_callback = bp_response;
 
-        Widget_t* quit = add_my_button(top, 720, 395, 60, 20, "Quit");
+        Widget_t* quit = add_my_button(top, 720, 495, 60, 20, "Quit");
         quit->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         quit->parent_struct = this;
         quit->func.value_changed_callback = quit_response;
@@ -180,6 +260,7 @@ public:
 
     void quitGui() {
         run = false;
+        cairo_surface_destroy(image_layer);
         destroy_widget(top, top->app);
     }
 
@@ -189,22 +270,41 @@ private:
     Widget_t* src_label = nullptr;
     Widget_t* spec = nullptr;
     Widget_t* lowcut = nullptr;
-    IRProcessor *ip;
+    Widget_t* frame[6];
+    Widget_t* ftype[6];
+    Widget_t* fenable[6];
+    Widget_t* freq[6];
+    Widget_t* fq[6];
+    Widget_t* fgain[6];
+    IRProcessor *ip = nullptr;
+    IRMorpher *conv = nullptr;
+    FFTAnalyzer* ana = nullptr;
     AudioFile af;
     Vec ref_;
     Vec source_;
     Vec diff_;
     Vec ir_;
+    Vec mag_;
     std::string ir_file;
     size_t irLength = 2048;
     double sampleRate = 48000.0;
     bool run = false;
+    bool band_match = false;
+    int match_state = -1;
+    int match_band = -1;
+    int mx = 0;
+    int my = 0;
+    int bin = 0;
+    int spec_width  = 0;
+    int spec_height = 0;
+    cairo_surface_t *image_layer = nullptr;
+    bool rebuild_layer = true;
     std::atomic<bool> set_leak {false};
 
     const float f_min = 20.0f;
     const float f_max = 20000.0f;
-    const float db_min = -108.0f;
-    const float db_max = 6.0f;
+    const float db_min = -96.0f;
+    const float db_max = 24.0f;
 
     void check_leak() {
         if (set_leak.load(std::memory_order_acquire) &&
@@ -215,11 +315,24 @@ private:
     }
 
     void check_irmatch() {
+
+        if (ana->hasNewData()) {
+            bin = ana->getBins();
+            mag_.clear();
+            const float* m = ana->getMagnitudes();
+            for (int i = 0; i<bin; i++) {
+                mag_.push_back(m[i]);
+            }
+            ana->clearFlag();
+            expose_widget(spec);
+        }
+
         if (ip->workerReady.load(std::memory_order_acquire)) {
             ip->workerReady.store(false, std::memory_order_release);
             setData(ip->getRefMag(), ip->getSrcMag(), 
                             ip->getDiffMag(), ip->getIRMag());
-            conv.setIR(ip->createIR());
+            conv->setIR(ip->createIR());
+            rebuild_layer = true;
             expose_widget(spec);
         }
     }
@@ -236,7 +349,40 @@ private:
 
     static void bp_response(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
-        conv.setBypass((int)adj_get_value(w->adj));
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->conv->setBypass((int)adj_get_value(w->adj));
+    }
+
+    static void set_ftype(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setFtype(w->data, (int)adj_get_value(w->adj));
+        self->set_leak.store(true, std::memory_order_release);
+    }
+
+    static void set_freq(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setFreq(w->data, adj_get_value(w->adj));
+    }
+
+    static void set_fq(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setFq(w->data, adj_get_value(w->adj));
+    }
+
+    static void set_fgain(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setFgain(w->data, adj_get_value(w->adj));
+    }
+
+    static void set_fenable(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setFenable(w->data, (int)adj_get_value(w->adj));
+        self->set_leak.store(true, std::memory_order_release);
     }
 
     static void set_lowcut(void *w_, void* user_data) {
@@ -245,10 +391,24 @@ private:
         self->ip->setLowCut((double)adj_get_value(w->adj));
     }
 
+    static void set_lowcut_enable(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setLowCutEnabled((int)adj_get_value(w->adj));
+        self->set_leak.store(true, std::memory_order_release);
+    }
+
     static void set_highcut(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         self->ip->setHighCut((double)adj_get_value(w->adj));
+    }
+
+    static void set_highcut_enable(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->ip->setHighCutEnabled((int)adj_get_value(w->adj));
+        self->set_leak.store(true, std::memory_order_release);
     }
 
     static void set_smooth(void *w_, void* user_data) {
@@ -353,6 +513,73 @@ private:
         }
     }
 
+    static void mouse_set_spec(void *w_, void *xbutton_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        XButtonEvent *xbutton = (XButtonEvent*)xbutton_;
+        if (w->flags & HAS_POINTER) {
+            if(xbutton->button == Button1) {
+                self->mx = xbutton->x;
+                self->my = xbutton->y;
+            }
+        }
+    }
+
+    static void mouse_in_spec(void *w_, void *xmotion_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        XMotionEvent *xmotion = (XMotionEvent*)xmotion_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        int x1 = xmotion->x;
+        int y1 = xmotion->y;
+        self->match_state = 0;
+        //std::cout << "x " << x1 << " y " << y1 << std::endl;
+        if(xmotion->state & Button1Mask) {
+            self->match_state = 1;
+            if (self->band_match) {
+                float v = adj_get_value(self->freq[self->match_band]->adj);
+                float deltaX = (float)x1 - self->mx;
+                v *= std::pow(2.0, deltaX * 0.005);
+                self->mx = x1;
+                adj_set_value(self->freq[self->match_band]->adj, v);
+
+                float vg = adj_get_value(self->fgain[self->match_band]->adj);
+                float deltay = (float)y1 - self->my;
+                vg += deltay * -0.1;
+                self->my = y1;
+                if (std::abs(vg) < 0.2) vg = 0.0;
+                adj_set_value(self->fgain[self->match_band]->adj, vg);
+                self->set_leak.store(true, std::memory_order_release);
+                expose_widget(self->spec);
+            }
+        } else {
+            self->find_hovered_band(x1, y1);
+        }
+    }
+
+    static void mouse_move_spec(void *w_, void *xbutton_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        XButtonEvent *xbutton = (XButtonEvent*)xbutton_;
+        if (w->flags & HAS_POINTER) {
+            if (self->band_match) {
+                if(xbutton->button == Button4) {
+                    float vq = adj_get_value(self->fq[self->match_band]->adj);
+                    vq *= std::pow(2.0, 0.1);
+                    adj_set_value(self->fq[self->match_band]->adj,vq);
+                    self->set_leak.store(true, std::memory_order_release);
+                    expose_widget(self->spec);
+                } else if(xbutton->button == Button5) {
+                    float vq = adj_get_value(self->fq[self->match_band]->adj);
+                    vq *= std::pow(2.0, -0.1);
+                    adj_set_value(self->fq[self->match_band]->adj,vq);
+                    self->set_leak.store(true, std::memory_order_release);
+                    expose_widget(self->spec);
+                }
+            }
+        }
+
+    }
+
     // Helpers
     float get_min_lowcut(float sr, size_t ir_len) {
         float fmin = sr / (float)ir_len;
@@ -385,6 +612,41 @@ private:
     }
 
     // Drawing
+
+    struct Theme {
+        // background
+        double bg_r = 0.08;
+        double bg_g = 0.09;
+        double bg_b = 0.11;
+
+        // grid
+        double grid_major_r = 0.35;
+        double grid_major_g = 0.38;
+        double grid_major_b = 0.42;
+
+        double grid_minor_r = 0.22;
+        double grid_minor_g = 0.24;
+        double grid_minor_b = 0.28;
+
+        // text
+        double text_r = 0.8;
+        double text_g = 0.82;
+        double text_b = 0.85;
+
+        double text_dim_r = 0.5;
+        double text_dim_g = 0.52;
+        double text_dim_b = 0.55;
+
+        // spectrum
+        double spec_alpha = 0.35;
+
+        // band fill / glow
+        double band_fill_alpha = 0.12;
+        double band_glow_alpha = 0.08;
+        double band_line_alpha = 0.95;
+    };
+    Theme t;
+
     static void draw_window(void* w_, void* user_data) {
         Widget_t* w = (Widget_t*)w_;
         cairo_t* cr = w->crb;
@@ -398,6 +660,336 @@ private:
         self->draw(w_);
     }
 
+    static void get_band_color(int i, double &r, double &g, double &b) {
+        if (i == 0) {
+            r = 0.95;
+            g = 0.55;
+            b = 0.20;
+        } else if (i == 1) {
+            r = 0.95;
+            g = 0.80;
+            b = 0.25;
+        } else if (i == 2) {
+            r = 0.40;
+            g = 0.85;
+            b = 0.35;
+        } else if (i == 3) {
+            r = 0.25;
+            g = 0.80;
+            b = 0.75;
+        } else if (i == 4) {
+            r = 0.30;
+            g = 0.55;
+            b = 0.95;
+        } else {
+            r = 0.75;
+            g = 0.40;
+            b = 0.95;
+         }
+    }
+
+    static double mapQ(double q_ui) {
+        // clamp UI range
+        q_ui = std::clamp(q_ui, 0.1, 10.0);
+        // log-space mapping
+        double x = std::log(q_ui);
+        // soften curve
+        double shaped = std::tanh(x * 0.8);
+        // back to linear
+        double q = std::exp(shaped * 1.5);
+        return q;
+    }
+
+    static inline double x_to_freq(double x, double f_min, double f_max, int width) {
+        double t = x / (double)width;
+        // log interpolation
+        double log_min = std::log(f_min);
+        double log_max = std::log(f_max);
+        double log_f = log_min + t * (log_max - log_min);
+        return std::exp(log_f);
+    }
+
+    static double eval_band_db(const Band& b, double f, double sr) {
+        if (f < 10.0) return 0.0;
+        double x = std::log2((f + 1e-9) / (b.freq + 1e-9));
+        double Q = mapQ(b.Q);
+
+        switch (b.type) {
+            case Band::Peak: {
+                double sigma = 1.0 / (1.5 * Q + 0.5);
+                double g = std::exp(-0.5 * (x * x) / (sigma * sigma));
+                return b.gain * g;
+            }
+            case Band::LowShelf: {
+                double slope = Q * 2.0;
+                double g = 0.5 * (1.0 - std::tanh(slope * x));
+                return b.gain * g;
+            }
+            case Band::HighShelf: {
+                double slope = Q * 2.0;
+                double g = 0.5 * (1.0 + std::tanh(slope * x));
+                return b.gain * g;
+            }
+        }
+        return 0.0;
+    }
+
+    void draw_band_ring(cairo_t* cr, float x, float y, int i, int state) {
+        double r,g,bcol;
+        get_band_color(i, r, g, bcol);
+        double radius = 6.0;
+        double ring   = 10.0;
+        double alpha  = 1.0;
+
+        if (state == 0) {
+            radius = 7.5;
+            ring   = 14.0;
+            alpha  = 0.5;
+        }
+        else if (state == 1) {
+            radius = 8.5;
+            ring   = 18.0;
+            alpha  = 0.6;
+        }
+
+        // --- Glow ---
+        cairo_arc(cr, x, y, ring, 0, 2*M_PI);
+        cairo_set_source_rgba(cr, r, g, bcol, 0.15);
+        cairo_fill(cr);
+
+        // --- Ring ---
+        cairo_arc(cr, x, y, radius + 3, 0, 2*M_PI);
+        cairo_set_line_width(cr, 2.0);
+        cairo_set_source_rgba(cr, r, g, bcol, 0.9 * alpha);
+        cairo_stroke(cr);
+
+        // --- Center Dot ---
+        cairo_arc(cr, x, y, radius, 0, 2*M_PI);
+        cairo_set_source_rgba(cr, r, g, bcol, 1.0 * alpha);
+        cairo_fill(cr);
+    }
+
+    void find_hovered_band(float mx, float my) {
+        Metrics_t m;
+        os_get_window_metrics(spec, &m);
+        const int width  = m.width;
+        const int height = m.height;
+        for (int i = 0; i < 6; ++i) {
+            float x = freq_to_x(ip->bands[i].freq, f_min, f_max, width);
+            float y = db_to_y(ip->bands[i].gain, db_min, db_max, height);
+
+            float dx = mx - x;
+            float dy = my - y;
+
+            if (dx*dx + dy*dy < 12*12) {
+                band_match = true;
+                match_band = i;
+                rebuild_layer = true;
+                expose_widget(spec);
+                return ;
+            } else if (band_match) {
+                band_match = false;
+                rebuild_layer = true;
+                expose_widget(spec);
+            }
+        }
+        band_match = false;
+    }
+
+    void draw_band_curves(cairo_t* cr, int width, int height)
+    {
+        const int STEPS = width;
+        float y0 = db_to_y(0.0, db_min, db_max, height);
+
+        for (int i = 0; i < 6; ++i) {
+            auto& b = ip->bands[i];
+            if (!b.enabled) continue;
+
+            // band color
+            double r,g,bcol;
+            get_band_color(i, r, g, bcol);
+            cairo_new_path(cr);
+            for (int x = 0; x < STEPS; ++x) {
+                double freq = x_to_freq(x, f_min, f_max, width);
+                double db = eval_band_db(b, freq, sampleRate);
+                double y = db_to_y(db, db_min, db_max, height);
+
+                if (x == 0)
+                    cairo_move_to(cr, x, y);
+                else
+                    cairo_line_to(cr, x, y);
+            }
+
+            // fill
+            cairo_line_to(cr, width, y0);
+            cairo_line_to(cr, 0, y0);
+            cairo_close_path(cr);
+
+            cairo_set_source_rgba(cr, r, g, bcol, t.band_fill_alpha);
+            cairo_fill_preserve(cr);
+            // glow
+            for (int k = 0; k < 3; ++k) {
+                double width_glow = 6.0 + k * 4.0;
+
+                cairo_set_line_width(cr, width_glow);
+                cairo_set_source_rgba(cr, r, g, bcol, t.band_fill_alpha * 0.5);
+                cairo_stroke_preserve(cr);
+            }
+
+            // line
+            cairo_set_line_width(cr, 1.5);
+            cairo_set_source_rgba(cr, r, g, bcol, t.band_line_alpha);
+            cairo_stroke(cr);
+        }
+    }
+
+    void draw_band_points(cairo_t* cr, const int width, const int height) {
+        cairo_set_line_width(cr, 10.0);
+        for(int i = 0; i<6; i++) {
+            double r,g,bcol;
+            get_band_color(i, r, g, bcol);
+            cairo_set_source_rgba(cr, r, g, bcol, 1.0);
+
+            int on = ip->bands[i].enabled;
+            float db = db_to_y(ip->bands[i].gain, db_min, db_max, height);
+            float freq = freq_to_x(ip->bands[i].freq, f_min, f_max, width);
+            if (on) {
+                cairo_move_to(cr, freq, db);
+                cairo_line_to(cr, freq, db);
+                cairo_stroke(cr);
+            }
+        }
+        for(int i = 0; i<6; i++) {
+            int on = ip->bands[i].enabled;
+            float db = db_to_y(ip->bands[i].gain, db_min, db_max, height);
+            float freq = freq_to_x(ip->bands[i].freq, f_min, f_max, width);
+            if (on) {
+                if (band_match && (match_band == i)) {
+                    draw_band_ring(cr, freq, db, i, match_state);
+                }
+            }
+        }
+    }
+
+    void create_background(Widget_t *w, const int width, const int height) {
+
+        std::vector<double> freqs = {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
+        std::vector<double> minor_freqs = {30, 40, 60, 70, 80, 90, 300, 400, 600, 700, 800,
+                                                    900, 3000, 4000, 6000, 7000, 8000, 9000};
+        std::vector<double> dbs = {-72, -48, -24, -18, -12, -6, 0, 6, 12, 18, 24};
+
+        cairo_surface_destroy(w->image);
+        w->image = nullptr;
+        w->image = cairo_surface_create_similar (w->surface,
+                            CAIRO_CONTENT_COLOR_ALPHA, width, height);
+        cairo_t *cr = cairo_create (w->image);
+
+        cairo_set_source_rgb(cr, t.bg_r, t.bg_g, t.bg_b);
+        cairo_rectangle(cr, 0, 0, width, height);
+        cairo_fill(cr);
+
+        cairo_pattern_t* grad = cairo_pattern_create_linear(0, 0, 0, height);
+        cairo_pattern_add_color_stop_rgba(grad, 0, 1,1,1,0.04);
+        cairo_pattern_add_color_stop_rgba(grad, 1, 0,0,0,0.1);
+
+        cairo_rectangle(cr, 0, 0, width, height);
+        cairo_set_source(cr, grad);
+        cairo_fill(cr);
+
+        cairo_pattern_destroy(grad);
+
+        cairo_set_source_rgba(cr, 0.267, 0.267, 0.267, 0.8);
+        cairo_set_line_width(cr, 1.0);
+
+        // Frequency lines
+        for (double f : freqs) {
+            double x = freq_to_x(f, f_min, f_max, width);
+            bool major = (f == 100 || f == 1000 || f == 10000);
+            cairo_set_source_rgba(
+                cr,
+                major ? t.grid_major_r : t.grid_minor_r,
+                major ? t.grid_major_g : t.grid_minor_g,
+                major ? t.grid_major_b : t.grid_minor_b,
+                major ? 0.5 : 0.25
+            );
+
+            cairo_set_line_width(cr, major ? 1.5 : 1.0);
+            cairo_move_to(cr, x, 0);
+            cairo_line_to(cr, x, height);
+            cairo_stroke(cr);
+        }
+        for (double f : minor_freqs) {
+            double x = freq_to_x(f, f_min, f_max, width);
+            cairo_set_source_rgba(
+                cr, t.grid_minor_r, t.grid_minor_g, t.grid_minor_b, 0.1 );
+
+            cairo_set_line_width(cr, 1.0);
+            cairo_move_to(cr, x, 0);
+            cairo_line_to(cr, x, height);
+            cairo_stroke(cr);
+        }
+
+        // dB lines
+        for (double db : dbs) {
+            double y = db_to_y(db, db_min, db_max, height);
+            bool major = (db == 0);
+            cairo_set_source_rgba(
+                cr,
+                major ? t.grid_major_r : t.grid_minor_r,
+                major ? t.grid_major_g : t.grid_minor_g,
+                major ? t.grid_major_b : t.grid_minor_b,
+                major ? 0.6 : 0.25
+            );
+
+            cairo_set_line_width(cr, major ? 1.5 : 1.0);
+            cairo_move_to(cr, 0, y);
+            cairo_line_to(cr, width, y);
+            cairo_stroke(cr);
+        }
+        // frequencies
+        for (double f : freqs) {
+            double x = freq_to_x(f, f_min, f_max, width);
+            char buf[32];
+            if (f >= 1000)
+                sprintf(buf, "%.0fk", f / 1000.0);
+            else
+                sprintf(buf, "%.0f", f);
+            cairo_set_source_rgba(cr, t.text_dim_r, t.text_dim_g, t.text_dim_b, 0.7);
+            cairo_move_to(cr, x + 4, height - 6);
+            cairo_show_text(cr, buf);
+        }
+
+        // dB
+        for (double db : dbs) {
+            double y = db_to_y(db, db_min, db_max, height);
+            char buf[16];
+            sprintf(buf, "%.0f", db);
+            cairo_set_source_rgba(cr, t.text_dim_r, t.text_dim_g, t.text_dim_b, 0.7);
+            cairo_move_to(cr, 5, y - 2);
+            cairo_show_text(cr, buf);
+        }
+        cairo_destroy(cr);
+    }
+
+    void create_layer(Widget_t *w, const int width, const int height, const float sample_rate) {
+        cairo_surface_destroy(image_layer);
+        image_layer = nullptr;
+        image_layer = cairo_surface_create_similar (w->surface,
+                            CAIRO_CONTENT_COLOR_ALPHA, width, height);
+        cairo_t *cr = cairo_create (image_layer);
+        cairo_set_source_surface (cr, w->image, 0, 0);
+        cairo_rectangle(cr,0, 0, width, height);
+        cairo_fill(cr);
+        drawSpectrum(cr, ref_,   width, height, sample_rate, 1.0, 0.333, 0.333,   "reference",   height-20);
+        drawSpectrum(cr, source_,width, height, sample_rate, 0.314, 0.98, 0.482,  "source",      height-40);
+        drawSpectrum(cr, diff_,  width, height, sample_rate, 1.0, 0.722, 0.424,   "diff",  height-60, true);
+        draw_band_points(cr, width, height);
+        draw_band_curves(cr, width, height);
+        drawSpectrum(cr, ir_,    width, height, sample_rate, 0.545, 0.914, 0.992, "impulse",      height-80);
+        cairo_destroy(cr);
+        rebuild_layer = false;
+    }
+
     void draw(void* w_) {
         Widget_t* w = (Widget_t*)w_;
 
@@ -407,71 +999,43 @@ private:
 
         cairo_t* cr = w->crb;
 
-        const int width  = m.width;
-        const int height = m.height;
-
         const float sample_rate = sampleRate;
 
-        cairo_set_source_rgb(cr, 0.188, 0.188, 0.188);
-        cairo_rectangle(cr, 0, 0, width, height);
-        cairo_fill(cr);
-
-        cairo_set_source_rgba(cr, 0.267, 0.267, 0.267, 0.8);
-        cairo_set_line_width(cr, 1.0);
-
-        const float freqs[] = {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
-
-        for (float f : freqs) {
-            float x = freq_to_x(f, f_min, f_max, width);
-            cairo_move_to(cr, x, 0);
-            cairo_line_to(cr, x, height);
+        const int width  = m.width;
+        const int height = m.height;
+        if (spec_height != height || spec_width != width) {
+            create_background(w, width, height);
+            create_layer(w, width, height, sample_rate);
+            spec_height = height;
+            spec_width = width;
         }
-        cairo_stroke(cr);
-
-        const float db_lines[] = {-96, -84, -72, -60, -48, -36, -24, -12, 0, 6};
-
-        for (float d : db_lines) {
-            float y = db_to_y(d, db_min, db_max, height);
-            cairo_move_to(cr, 0, y);
-            cairo_line_to(cr, width, y);
+        if (!image_layer || rebuild_layer) {
+            create_layer(w, width, height, sample_rate);
         }
-        cairo_stroke(cr);
-
-        drawSpectrum(cr, ref_,   width, height, sample_rate, 1.0, 0.333, 0.333,   "reference",  20);
-        drawSpectrum(cr, source_,width, height, sample_rate, 0.314, 0.98, 0.482,  "source",     40);
-        drawSpectrum(cr, diff_,  width, height, sample_rate, 1.0, 0.722, 0.424,   "diff", 60, true);
-        drawSpectrum(cr, ir_,    width, height, sample_rate, 0.545, 0.914, 0.992, "impulse",    80);
-
-        cairo_set_source_rgba(cr, 0.973, 0.973, 0.949, 0.6);
-        cairo_set_font_size(cr, 10);
-
-        for (float d : db_lines) {
-            float y = db_to_y(d, db_min, db_max, height);
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%.0f", d);
-            draw_text(cr, 4, y - 2, buf);
+        if (image_layer) {
+            cairo_set_source_surface (w->crb, image_layer, 0, 0);
+            cairo_rectangle(w->crb,0, 0, width, height);
+            cairo_fill(w->crb);
+        } else {
+            create_background(w, width, height);
+            create_layer(w, width, height, sample_rate);
+            return;
         }
 
-        for (float f : freqs) {
-            float x = freq_to_x(f, f_min, f_max, width);
-            char buf[16];
+        drawSpectrum(cr, mag_,   width, height, sample_rate, 0.45, 0.2, 0.75, "input", height-100, false, true);
 
-            if (f >= 1000.0f)
-                snprintf(buf, sizeof(buf), "%.0fk", f / 1000.0f);
-            else
-                snprintf(buf, sizeof(buf), "%.0f", f);
+        cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 11);
 
-            draw_text(cr, std::min<int>(width - 20, x - 10), height - 4, buf);
-        }
     }
 
     void drawSpectrum(cairo_t* cr, const Vec& mags, int width, int height,
                       float sample_rate, float r, float g, float b,
-                      const char* label, float label_y, bool dash = false) {
+                      const char* label, float label_y, bool dash = false, bool fill = false) {
 
         if (mags.empty()) return;
 
-        cairo_set_source_rgba(cr, r, g, b, 1.0);
+        cairo_set_source_rgba(cr, r, g, b, t.spec_alpha);
         draw_text(cr, width - 60, label_y, label);
 
         cairo_set_line_width(cr, 1.5);
@@ -499,16 +1063,30 @@ private:
             float y = db_to_y(mags[i], db_min, db_max, height);
 
             if (!started) {
-                cairo_move_to(cr, x, y);
+                cairo_move_to(cr, 3, y);
                 started = true;
             } else {
-                if (x > last_x + 0.5f) {
+                if (x > last_x + 0.8f) {
                     cairo_line_to(cr, x, y);
                     last_x = x;
                 }
             }
         }
-
+        cairo_stroke_preserve(cr);
+    
+        // Spectrum fill
+        if (started && fill) {
+            //cairo_set_source_rgba(cr,  0.17, 0.82, 0.64, 0.15);
+            cairo_line_to(cr, width, height);
+            cairo_line_to(cr, 3, height);
+            cairo_close_path(cr);
+            cairo_pattern_t* pat = cairo_pattern_create_linear(0, 0, 0, height);
+            cairo_pattern_add_color_stop_rgba(pat, 0.0, 0.75, 0.2, 0.9, 0.25);
+            cairo_pattern_add_color_stop_rgba(pat, 1.0, 0.45, 0.2, 0.75, 0.05);
+            cairo_set_source(cr, pat);
+            cairo_fill(cr);
+            cairo_pattern_destroy(pat);
+        }
         cairo_stroke(cr);
     }
 };
