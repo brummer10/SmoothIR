@@ -25,6 +25,29 @@ The result is an IR that behaves like a **well-tuned filter**, ideal for creativ
 * Continuous **Smooth** control for musical shaping
 * Stable, deterministic processing (no heuristics, no randomness)
 * Interactive spectrum UI with band-style workflow
+* Zero-latency hybrid convolution engine (FIR head + FFT tail)
+* Real-time safe processing suitable for plugin environments
+* IR morphing / live updates without audio dropouts
+
+---
+
+## Processing Engine
+
+SmoothIR uses a **hybrid convolution engine** designed for real-time audio use.
+
+It combines:
+
+* A **zero-latency FIR head** (time domain)
+* A **partitioned FFT tail** (frequency domain)
+
+This design ensures:
+
+* Instant transient response (no delay on attack)
+* Efficient processing of long impulse responses
+* Stable CPU usage even with large IR sizes
+
+In practice, this behaves as **true zero-latency processing**,  
+while still supporting high-resolution filtering.
 
 ---
 
@@ -63,9 +86,41 @@ Frequencies below ~20 Hz are automatically de-emphasized to avoid instability an
 
 ---
 
+## Real-Time Interaction
+
+SmoothIR is designed for interactive workflows:
+
+* Immediate IR updates after parameter changes
+* Click-free IR switching
+* Stable behavior even under rapid parameter changes
+
+This allows SmoothIR to behave like a real-time EQ,
+while internally operating on impulse responses.
+
 ## Sound Shaping
 
 After spectral matching, the IR is shaped in a controlled and predictable way.
+
+## Spectral EQ Concept
+
+SmoothIR can also be understood as a **spectral EQ built on impulse responses**.
+
+Instead of stacking traditional filter stages:
+
+> The entire EQ curve is embedded into a single minimum-phase IR
+
+This approach provides:
+
+* Perfectly smooth phase behavior
+* No filter interaction artifacts
+* Extremely natural tonal shaping
+
+All band adjustments (frequency, gain, Q) directly modify the spectral target,
+which is then converted into a coherent IR.
+
+This results in:
+
+> EQ behavior that feels continuous, stable, and highly musical
 
 ### Low / High Cut (EQ-style)
 
@@ -149,8 +204,8 @@ Goal:
 * Over-smoothing removes character  
   → use moderately  
 
-* The generated IR is **minimum-phase**  
-  → efficient, low latency, and practical  
+* The generated IR is **minimum-phase**
+  → efficient, phase-coherent, and optimized for zero-latency convolution
 
 ---
 
