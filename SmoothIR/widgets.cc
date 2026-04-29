@@ -11,6 +11,11 @@
 #include "xfile-dialog.h"
 
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
 char* utf8crop(char* dst, const char* src, size_t sizeDest ) {
     if( sizeDest ){
         size_t sizeSrc = strlen(src);
@@ -60,7 +65,7 @@ void draw_label(void *w_, void* user_data) {
     if (!metrics.visible) return;
     char label[124];
     memset(label, '\0', sizeof(char)*124);
-    utf8crop_middle(label, w->label, 40);
+    utf8crop_middle(label, w->label, 39);
     cairo_text_extents_t extents_f;
     widget_set_scale(w);
     cairo_set_font_size (w->crb, w->app->normal_font * w->app->hdpi);
@@ -309,3 +314,8 @@ Widget_t* add_my_combobox(Widget_t *p,const char * label,
     //w->func.value_changed_callback = value_changed;
     return w;
 }
+
+
+#ifdef __cplusplus
+}
+#endif

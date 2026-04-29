@@ -61,8 +61,16 @@ public:
                    size_t irLength_ = 4096, bool rebuild = false, size_t fftSize = 0) {
         sampleRate = sampleRate_;
         irLength = irLength_;
-        if (source.size()) haveSource = true;
-        if (reference.size()) haveReference = true;
+        if (source.size()) {
+            haveSource = true;
+        } else {
+            haveSource = false;
+        }
+        if (reference.size()) {
+            haveReference = true;
+        } else {
+            haveReference = false;
+        }
         size_t maxAnalysisSize = sampleRate * 4;
         
         Vec ref_trunc = center_crop(reference, maxAnalysisSize);
@@ -272,6 +280,7 @@ private:
     }
 
     void make_flat(Vec& v, size_t bins, double db = 0.0) {
+        v.clear();
         v.assign(bins, db);
     }
 
@@ -300,6 +309,9 @@ private:
                 CVec f1 = fft(a);
                 CVec f2 = fft(b);
 
+                // reset normalise dB
+                peak = 0.0;
+
                 if (haveSource && haveReference) {
                     CVec H = safe_divide(f1, f2);
                     last_diff_ = magnitude_db(H);
@@ -323,8 +335,6 @@ private:
                     last_src_ = magnitude_db(f2);
                     last_src_ = adaptive_log_smooth(last_src_, sampleRate);
 
-                    // normalise dB
-                    peak = 0.0; // reset
                     peak = std::max(
                         *std::max_element(last_ref_.begin(), last_ref_.end()),
                         *std::max_element(last_src_.begin(), last_src_.end())

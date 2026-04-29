@@ -22,6 +22,7 @@
 #include "FFTAnalyzer.h"
 #include "IrMatch.h"
 #include "IrMorpher.h"
+#include "Gain.h"
 
 
 #include "SpectrumViewer.h"
@@ -36,8 +37,9 @@ int main(int argc, char *argv[]){
     FFTAnalyzer ana;
     IRProcessor ip;
     IRMorpher conv;
-    SpectrumViewer sw(&ip, &conv, &ana);
-    JackClient jack(&conv, &sw, &ana);
+    Gain vu;
+    SpectrumViewer sw(&ip, &conv, &ana, &vu);
+    JackClient jack(&conv, &sw, &ana, &vu);
 
     std::vector<double> srcf;
     std::vector<double> dstf;

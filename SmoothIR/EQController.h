@@ -10,6 +10,11 @@
 #include "xwidgets.h"
 
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// knob
 static void show_label(Widget_t *w, int width, int height) {
     //use_text_color_scheme(w, get_color_state(w));
     cairo_set_source_rgba(w->crb, 0.61, 0.649, 0.583, 1.0);
@@ -21,7 +26,6 @@ static void show_label(Widget_t *w, int width, int height) {
     cairo_show_text(w->crb, w->label);
     cairo_new_path (w->crb);
 }
-
 
 void draw_my_knob(void *w_, void* user_data) {
     Widget_t *w = (Widget_t*)w_;
@@ -68,7 +72,6 @@ void draw_my_knob(void *w_, void* user_data) {
           add_angle + scale_zero, add_angle + angle);
     cairo_stroke(w->crb);
 
-
     use_text_color_scheme(w, get_color_state(w));
     cairo_text_extents_t extents;
     /** show value below the kob**/
@@ -91,7 +94,6 @@ void draw_my_knob(void *w_, void* user_data) {
     show_label(w, width, height + (w->app->small_font + 9) + w->app->normal_font);
 }
 
-
 Widget_t* add_my_knob(Widget_t *parent, const char * label, const char* type,
                 int x, int y, int width, int height) {
 
@@ -104,6 +106,7 @@ Widget_t* add_my_knob(Widget_t *parent, const char * label, const char* type,
 }
 
 
+// frame
 static void setFrameColour(Widget_t* w, cairo_t *cr, int x, int y, int wi, int h) {
     Colors *c = get_color_scheme(w, NORMAL_);
    // Colors *c1 = get_color_scheme(w, PRELIGHT_);
@@ -137,16 +140,7 @@ static void draw_frame(void *w_, void* user_data) {
     cairo_set_source_rgba(w->crb, 0.16,0.16,0.18,1.0);
     roundrec(w->crb, 2, 0, width_t-4, height_t, 5);
     cairo_fill_preserve(w->crb);
-/*
-    cairo_pattern_t *pat = cairo_pattern_create_linear( 0, 0, 0, height_t);
-    cairo_pattern_add_color_stop_rgba(pat, 0.00, 0.32, 0.36, 0.36, 0.83);
-    cairo_pattern_add_color_stop_rgba(pat, 0.09, 0.25, 0.25, 0.25, 0.0);
-    cairo_pattern_add_color_stop_rgba(pat, 0.92, 0.113, 0.113, 0.113, 0.0);
-    cairo_pattern_add_color_stop_rgba(pat, 1.00, 0.083, 0.083, 0.083, 0.83);
-    cairo_set_source(w->crb, pat);
-    cairo_fill_preserve(w->crb);
-    cairo_pattern_destroy(pat);
-*/
+
     setFrameColour(w, w->crb, 5, 5, width_t-10, height_t-10);
     cairo_stroke(w->crb);
     cairo_new_path (w->crb);
@@ -163,67 +157,7 @@ Widget_t* add_my_frame(Widget_t *parent, const char * label,
     return wid;
 }
 
-void draw_enable_button(void *w_, void* user_data) {
-    Widget_t *w = (Widget_t*)w_;
-    if (!w) return;
-
-    Metrics_t metrics;
-    os_get_window_metrics(w, &metrics);
-    if (!metrics.visible) return;
-
-    const int width  = metrics.width;
-    const int height = metrics.height;
-    const int state  = (int)adj_get_value(w->adj); // 0 = off, 1 = on
-    const float cx = width * 0.5f;
-    const float cy = height * 0.5f;
-    const float r  = (width < height ? width : height) * 0.35f;
-
-    roundrec(w->crb, 0, 0, width, height, 0.25);
-    cairo_set_source_rgba(w->crb, 0.08, 0.08, 0.08, 1.0);
-    cairo_fill(w->crb);
-
-    Colors *c = get_color_scheme(w, NORMAL_);
-    float cr = c->fg[0], cg = c->fg[1], cb = c->fg[2]; 
-    float alpha = state ? 1.0 : 0.25;
-
-    cairo_arc(w->crb, cx, cy, r, 0, 2 * M_PI);
-    cairo_set_line_width(w->crb, 2.0);
-
-    if (w->state == 1) { // hover
-        cairo_set_source_rgba(w->crb, cr, cg, cb, alpha + 0.2);
-        cairo_set_line_width(w->crb, 2.5);
-    } else {
-        cairo_set_source_rgba(w->crb, cr, cg, cb, alpha);
-    }
-
-    cairo_stroke(w->crb);
-    float inner_r = r * 0.45f;
-    cairo_arc(w->crb, cx, cy, inner_r, 0, 2 * M_PI);
-    cairo_pattern_t* pat = cairo_pattern_create_radial(cx, cy, inner_r * 0.1, cx, cy, inner_r);
-
-    if (state) {
-        cairo_pattern_add_color_stop_rgba(pat, 0.0, cr, cg, cb, 1.0);
-        cairo_pattern_add_color_stop_rgba(pat, 0.6, cr*0.6, cg*0.6, cb*0.6, 1.0);
-        cairo_pattern_add_color_stop_rgba(pat, 1.0, 0.05, 0.05, 0.05, 1.0);
-    } else {
-         cairo_pattern_add_color_stop_rgba(pat, 0.0, 0.15, 0.15, 0.15, 1.0);
-        cairo_pattern_add_color_stop_rgba(pat, 1.0, 0.03, 0.03, 0.03, 1.0);
-    }
-
-    cairo_set_source(w->crb, pat);
-    cairo_fill(w->crb);
-    cairo_pattern_destroy(pat);
-
-    if (w->state == 1 && state) {
-        cairo_arc(w->crb, cx, cy, r + 2.0, 0, 2 * M_PI);
-        cairo_set_source_rgba(w->crb, cr, cg, cb, 0.15);
-        cairo_set_line_width(w->crb, 3.0);
-        cairo_stroke(w->crb);
-    }
-
-    cairo_new_path(w->crb);
-}
-
+// power button
 void draw_power_button(void *w_, void* user_data) {
     Widget_t *w = (Widget_t*)w_;
     if (!w) return;
@@ -289,8 +223,7 @@ Widget_t *add_my_enable_button(Widget_t *parent, int x, int y, int width, int he
     return fbutton;
 }
 
-
-
+// combo box
 void draw_combobox_button(void *w_, void* user_data) {
     Widget_t *w = (Widget_t*)w_;
     if (!w) return;
@@ -345,10 +278,267 @@ void draw_combobox_button(void *w_, void* user_data) {
    
 }
 
-
 Widget_t* add_type_combobox(Widget_t *p,const char * label,
                                 int x, int y, int width, int height) {
     Widget_t* w = add_combobox(p, label, x, y, width, height);
     w->childlist->childs[0]->func.expose_callback = draw_combobox_button;
     return w;
 }
+
+// vu meter
+float log_meter(float db) {
+    if (db < -70.0f) db = -70.0f;
+    if (db > 6.0f)   db = 6.0f;
+    float norm = (db + 70.0f) / 76.0f;
+    return powf(norm, 1.5f);
+}
+
+void draw_vmeter_scale(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    int rect_width = metrics.width;
+    int rect_height = metrics.height;
+    double x0      = 0;
+    double y0      = 0;
+
+    int  db_points[] = { -60, -48, -36, -24, -12, -6, 0, 3 };
+    char  buf[32];
+
+    cairo_set_font_size (w->crb, (float)rect_width * 0.58);
+    cairo_set_source_rgb(w->crb, 0.6, 0.6, 0.6);
+
+    for (unsigned int i = 0; i < sizeof (db_points)/sizeof (db_points[0]); ++i)
+    {
+        float fraction = log_meter((double)db_points[i]);
+        cairo_move_to (w->crb, 0,y0+rect_height - (rect_height * fraction));
+        cairo_line_to (w->crb, x0+rect_width-3 ,y0+rect_height -  (rect_height * fraction));
+        if (i<6)
+        {
+            snprintf (buf, sizeof (buf), "%d", db_points[i]);
+            cairo_move_to (w->crb, x0+rect_width*0.1,y0+rect_height - (rect_height * fraction)-3);
+        }
+        else if (i<8)
+        {
+            snprintf (buf, sizeof (buf), "%d", db_points[i]);
+            cairo_move_to (w->crb, x0+rect_width*0.2,y0+rect_height - (rect_height * fraction)-3);
+        }
+        else
+        {
+            snprintf (buf, sizeof (buf), " %d", db_points[i]);
+            cairo_move_to (w->crb, x0+rect_width*0.21,y0+rect_height - (rect_height * fraction)-3);
+        }
+        cairo_show_text (w->crb, buf);
+    }
+
+    cairo_set_source_rgb(w->crb, 0.6, 0.6, 0.6);
+    cairo_set_line_width(w->crb, 1.0);
+    cairo_stroke(w->crb);
+}
+
+void create_vertical_meter_image(Widget_t *w, int width, int height) {
+
+    cairo_surface_destroy(w->image);
+    w->image = NULL;
+    w->image = cairo_surface_create_similar(w->surface, CAIRO_CONTENT_COLOR_ALPHA, width * 2, height);
+    cairo_t *cri = cairo_create(w->image);
+
+    cairo_rectangle(cri, 0, 0, width, height);
+    cairo_set_source_rgb(w->crb, 0.16,0.16,0.18);
+    cairo_fill(cri);
+    cairo_rectangle(cri, width, 0, width, height);
+    cairo_fill(cri);
+
+    cairo_pattern_t *pat = cairo_pattern_create_linear(0, 0, 0, height);
+    cairo_pattern_add_color_stop_rgba(pat, 1.0, 0.1, 0.5, 0.1, 0.3);
+    cairo_pattern_add_color_stop_rgba(pat, 0.2, 0.4, 0.4, 0.1, 0.3);
+    cairo_pattern_add_color_stop_rgba(pat, 0.0, 0.5, 0.0, 0.0, 0.3);
+
+    roundrec(cri, 0, 0, width, height, 5.5);
+    cairo_set_source_rgb(cri, 0.16,0.16,0.18);
+    cairo_set_line_width(cri, 4.0);
+    cairo_stroke_preserve(cri); 
+
+    cairo_set_source(cri, pat);
+    cairo_fill(cri);
+    cairo_pattern_destroy(pat);
+    cairo_new_path(cri);
+
+    pat = cairo_pattern_create_linear(0, 0, 0, height);
+    cairo_pattern_add_color_stop_rgba(pat, 1.0, 0.1, 0.5, 0.1, 1.0);
+    cairo_pattern_add_color_stop_rgba(pat, 0.2, 0.4, 0.4, 0.1, 1.0);
+    cairo_pattern_add_color_stop_rgba(pat, 0.0, 0.5, 0.0, 0.0, 1.0);
+
+    roundrec(cri, width, 0, width, height, 5.5);
+
+    cairo_set_source(cri, pat);
+    cairo_fill_preserve(cri);
+    cairo_set_source_rgb(cri, 0.14,0.14,0.16);
+    cairo_set_line_width(cri, 4.0);
+    cairo_stroke(cri); 
+    cairo_pattern_destroy(pat);
+
+    cairo_destroy(cri);
+}
+
+void draw_vmeter(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+
+    int width, height;
+    os_get_surface_size(w->image, &width, &height);
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    int width_t = metrics.width;
+    int height_t = metrics.height;
+    if (width != width_t*2 || height != height_t) {
+        create_vertical_meter_image(w, width_t, height_t);
+        os_get_surface_size(w->image, &width, &height);
+    }
+    double meterstate = log_meter(adj_get_value(w->adj_y));
+    double oldstate = log_meter(w->adj_y->start_value);
+    cairo_set_source_surface (w->crb, w->image, 0, 0);
+    cairo_rectangle(w->crb,0, 0, width/2, height);
+    cairo_fill(w->crb);
+    cairo_set_source_surface (w->crb, w->image, -width/2, 0);
+    cairo_rectangle(w->crb, 0, height, width/2, -height*meterstate);
+    cairo_fill(w->crb);
+
+    cairo_rectangle(w->crb, 0, height-height*oldstate, width/2, 3);
+    cairo_fill(w->crb);
+}
+
+float power2dB(Widget_t *w, float power) {
+    const float falloff = 27 * 60 * 0.0005;
+    const float fallsoft = 6 * 60 * 0.0005;
+    //power = 20.*log10(power);
+    if (power <=  20.*log10(0.00021)) { // -70db
+        power = 20.*log10(0.00000000001); //-137db
+        w->adj->start_value = min(0.0,w->adj->start_value - fallsoft);
+    }
+    // retrieve old meter value and consider falloff
+    if (power < w->adj->std_value) {
+        power = max(power, w->adj->std_value - falloff);
+        w->adj->start_value = min(0.0,w->adj->start_value - fallsoft);
+    }
+    if (power > w->adj->start_value) {
+        w->adj->start_value = power ;
+    }
+    
+    w->adj->std_value = power;
+    return  power;
+}
+
+Widget_t* add_my_vmeter(Widget_t *parent, const char * label, bool show_scale,
+                int x, int y, int width, int height) {
+
+    Widget_t *wid = create_widget(parent->app, parent, x, y, width, height);
+    create_vertical_meter_image(wid, width, height);
+    wid->label = label;
+    wid->adj_y = add_adjustment(wid,-70.0, -70.0, -180.0, 6.0,0.001, CL_METER);
+    wid->adj = wid->adj_y;
+    wid->flags &= ~USE_TRANSPARENCY;
+    wid->scale.gravity = ASPECT;
+    wid->func.expose_callback = draw_vmeter;
+    if (show_scale) {
+        Widget_t *wid2 = create_widget(parent->app, parent, x+width, y, width+4, height);
+        wid2->scale.gravity = ASPECT;
+        wid2->func.expose_callback =draw_vmeter_scale;
+    }
+    return wid;
+}
+
+// slider
+void draw_vslider(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    Metrics_t m;
+    os_get_window_metrics(w, &m);
+    if (!m.visible) return;
+
+    float value = adj_get_state(w->adj_y);
+
+    cairo_set_source_rgb(w->crb, 0.10, 0.11, 0.13);
+    cairo_rectangle(w->crb, 0, 0, m.width, m.height);
+    cairo_fill(w->crb);
+
+    cairo_pattern_t *track = cairo_pattern_create_linear(0, 0, 0, m.height);
+    cairo_pattern_add_color_stop_rgba(track, 0.0, 0.157, 0.165, 0.212, 0.8);
+    cairo_pattern_add_color_stop_rgba(track, 1.0, 0.157, 0.165, 0.212, 1.0);
+
+    cairo_rectangle(w->crb, m.width*0.25, 4, m.width*0.5, m.height-8);
+    cairo_set_source(w->crb, track);
+    cairo_fill(w->crb);
+    cairo_pattern_destroy(track);
+
+    float fill_h = (m.height-8) * value;
+    float y = (m.height-4) - fill_h;
+
+    cairo_pattern_t *fill = cairo_pattern_create_linear(0, y, 0, m.height);
+    cairo_pattern_add_color_stop_rgba(fill, 0.0, 0.219,0.208,0.235, 0.8);
+    cairo_pattern_add_color_stop_rgba(fill, 1.0, 0.16,0.16,0.18, 1.0);
+
+    cairo_rectangle(w->crb, m.width*0.25, y, m.width*0.5, fill_h);
+    cairo_set_source(w->crb, fill);
+    cairo_fill(w->crb);
+    cairo_pattern_destroy(fill);
+
+    cairo_set_source_rgba(w->crb, 0.06,0.06,0.08, 0.6);
+    cairo_set_line_width(w->crb, 2.2);
+    cairo_move_to(w->crb, m.width*0.2, y);
+    cairo_line_to(w->crb, m.width*0.8, y);
+    cairo_stroke(w->crb);
+
+    cairo_set_source_rgba(w->crb, 1,1,1,0.5);
+    cairo_set_line_width(w->crb, 1.2);
+    float fill_0 = (m.height-8) * 0.793103;
+    float y0 = (m.height-4) - fill_0;
+    cairo_move_to(w->crb, m.width*0.2, y0);
+    cairo_line_to(w->crb, m.width*0.8, y0);
+    cairo_stroke(w->crb);
+
+    cairo_set_source_rgba(w->crb, 1,1,1,0.06);
+    cairo_rectangle(w->crb, m.width*0.25, 4, m.width*0.5, m.height-8);
+    cairo_stroke(w->crb);
+
+    cairo_set_source_rgba(w->crb, 0,0,0,0.6);
+    cairo_rectangle(w->crb, 0, 0, m.width, m.height);
+    cairo_stroke(w->crb);
+
+    cairo_text_extents_t ext;
+    cairo_set_source_rgba(w->crb, 0.85, 0.85, 0.9, 0.85);
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.1f", adj_get_value(w->adj));
+    cairo_set_font_size(w->crb, m.width * 0.40);
+    cairo_text_extents(w->crb, buf, &ext);
+    cairo_move_to(w->crb, (m.width - ext.width)/2, ext.height + 2);
+    cairo_show_text(w->crb, buf);
+}
+
+void slider_released(void *w_, void* button_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    expose_widget(w);
+}
+
+Widget_t* add_my_vslider(Widget_t *parent, const char * label,
+                int x, int y, int width, int height) {
+
+    Widget_t *wid = create_widget(parent->app, parent, x, y, width, height);
+    Slider_t *slider;
+    slider = (Slider_t*)malloc(sizeof(Slider_t));
+    slider->frames = 101;
+    wid->private_struct = slider;
+    wid->flags |= HAS_MEM;
+    wid->label = label;
+    wid->adj_y = add_adjustment(wid,0.0, 0.0, 0.0, 1.0,0.01, CL_CONTINUOS);
+    wid->adj = wid->adj_y;
+    wid->scale.gravity = ASPECT;
+    wid->func.expose_callback = draw_vslider;
+    wid->func.enter_callback = os_transparent_draw;
+    wid->func.leave_callback = os_transparent_draw;
+    wid->func.button_release_callback = slider_released;
+    wid->func.mem_free_callback = slider_mem_free;
+    return wid;
+}
+
+#ifdef __cplusplus
+}
+#endif

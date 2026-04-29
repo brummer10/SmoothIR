@@ -22,11 +22,12 @@ class SpectrumViewer;
 
 class JackClient {
 public:
-    JackClient(IRMorpher* conv_, SpectrumViewer* sw_, FFTAnalyzer* ana_) : xrworker()
+    JackClient(IRMorpher* conv_, SpectrumViewer* sw_, FFTAnalyzer* ana_, Gain* vu_) : xrworker()
 {
         conv = conv_;
         sw = sw_;
         ana = ana_;
+        vu = vu_;
         abuffer = new float[8192];
         memset(abuffer, 0, 8192 * sizeof(float));
         xrworker.start();
@@ -105,6 +106,7 @@ private:
     IRMorpher* conv = nullptr;
     SpectrumViewer* sw = nullptr;
     FFTAnalyzer* ana = nullptr;
+    Gain* vu;
     jack_client_t* client = nullptr;
     jack_port_t* in_port = nullptr;
     jack_port_t* out_port = nullptr;
@@ -136,6 +138,7 @@ private:
         fprintf(stderr, "Samplerate %u Hz\n", samplerate);
         self->sw->setSampleRate((int)samplerate);
         self->ana->init(4096, (float)samplerate);
+        self->vu->init(samplerate);
         self->xrworker.setThreadName("Worker");
         self->xrworker.set<JackClient, &JackClient::analyse>(self);
         self->xrworker.runProcess();
@@ -166,6 +169,7 @@ private:
             memcpy(output, input, nframes * sizeof(float));
 
         self->conv->process(nframes, input, output);
+        self->vu->process(nframes, output, output);
 
         memcpy(self->abuffer, output, nframes * sizeof(float));
         self->frames = nframes;
