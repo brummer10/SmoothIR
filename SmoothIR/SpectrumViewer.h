@@ -60,10 +60,9 @@ public:
         Xputty main;
         main_init(&main);
 
-        top = create_window(&main,
-            os_get_root_window(&main, IS_WINDOW),
-            0, 0, width, height);
+        top = create_window(&main, os_get_root_window(&main, IS_WINDOW), 0, 0, width, height);
         widget_set_title(top, "Smoothed IR");
+        widget_set_icon_from_png(top,LDVAR(smoothir_png));
         //top->flags = NO_PROPAGATE;
         top->func.expose_callback = draw_window;
 

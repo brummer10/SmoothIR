@@ -27,6 +27,9 @@ endif
 
 libxputty: check-and-reinit-submodules
 ifeq (,$(filter $(NOGOAL),$(MAKECMDGOALS)))
+ifeq (,$(wildcard ./libxputty/xputty/resources/smoothir.png))
+	@cp ./SmoothIR/*.png ./libxputty/xputty/resources/
+endif
 	@exec $(MAKE) --no-print-directory -j 1 -C $@ $(MAKECMDGOALS)
 endif
 ifneq (,$(filter $(SWITCHGOAL),$(MAKECMDGOALS)))
@@ -40,5 +43,6 @@ ifeq (,$(filter $(PASS),$(MAKECMDGOALS)))
 endif
 
 clean:
+	@rm -f ./libxputty/xputty/resources/smoothir.png
 
 features:
