@@ -1,0 +1,105 @@
+name: Build AppImage
+
+on:
+  push:
+
+jobs:
+  build-appimage:
+    runs-on: ubuntu-22.04
+    permissions:
+        contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+      with:
+        submodules: recursive
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential \
+          libsndfile1-dev \
+          libfftw3-dev \
+          libjack-jackd2-dev \
+          libcairo2-dev \
+          libx11-dev \
+          libasound2-dev
+
+    - name: Build project
+      run: |
+        make
+
+    - name: Prepare AppDir structure
+      run: |
+        mkdir -p AppDir/usr/bin
+        cp bin/* AppDir/usr/bin/
+        cat > AppDir/smoothir.desktop <<EOF
+        [Desktop Entry]
+        Name=smoothir
+        Exec=smoothir
+        Icon=smoothir
+        Type=Application
+        Categories=AudioVideo;
+        EOF
+        cp SmoothIR/smoothir.svg AppDir/smoothir.svg
+
+    - name: Download linuxdeploy
+      run: |
+        wget https://github.com/linuxdeploy/linuxdeploy/releases/latest/download/linuxdeploy-x86_64.AppImage
+        chmod +x linuxdeploy-x86_64.AppImage
+
+    - name: Build AppImage
+      env:
+        APPIMAGE_EXTRACT_AND_RUN: 1
+      run: |
+        ./linuxdeploy-x86_64.AppImage \
+          --appdir AppDir \
+          --desktop-file AppDir/smoothir.desktop \
+          --icon-file AppDir/smoothir.svg \
+          --output appimage
+
+    - name: Create release filename (tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      shell: bash
+      run: |
+        set -euo pipefail
+        RELEASE_BASENAME="${{ github.event.repository.name }}-x86_64-${{ github.ref_name }}"
+        RELEASE_FILENAME="${RELEASE_BASENAME}.AppImage"
+        echo "RELEASE_FILENAME=${RELEASE_FILENAME}" >> $GITHUB_ENV
+
+        BUILT=$(ls SmoothIR-*.AppImage 2>/dev/null | head -n1 || true)
+        if [[ -z "$BUILT" ]]; then
+          echo "ERROR: No built AppImage found matching SmoothIR-*.AppImage"
+          ls -la || true
+          exit 1
+        fi
+        echo "Found built AppImage: $BUILT"
+        cp "$BUILT" "$RELEASE_FILENAME"
+        chmod +x "$RELEASE_FILENAME"
+
+    - name: Create GitHub release (tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: softprops/action-gh-release@v3
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        files: ${{ env.RELEASE_FILENAME }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload AppImage artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: SmoothIR-x86_64.AppImage
+        path: SmoothIR-*.AppImage
+
+    - name: Upload release archive (tag)
+      if: startsWith(github.ref, 'refs/tags/')
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ env.RELEASE_FILENAME }}
+        path: ${{ env.RELEASE_FILENAME }}
