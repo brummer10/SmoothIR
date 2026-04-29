@@ -44,7 +44,6 @@ int main(int argc, char *argv[]){
     std::vector<double> srcf;
     std::vector<double> dstf;
 
-    jack.start();
 
     if (!cmd.parseCmdLine(argc, argv)) {
         cmd.printUsage(argv[0]);
@@ -53,26 +52,41 @@ int main(int argc, char *argv[]){
 
     std::string src = cmd.opt.src.value_or("");
     std::string dst = cmd.opt.dst.value_or("");
+    std::string ir_file = cmd.opt.ir.value_or("");
+    int sr = cmd.opt.sampleRate.value_or(48000);
+
+    if(ir_file.empty()) {
+        jack.start();
+        sr = sw.getSampleRate();
+    }
 
     if(!src.empty()) {
-        if (! af.getAudioFile(src.c_str(), sw.getSampleRate()) ) return 1;
+        if (! af.getAudioFile(src.c_str(), sr) ) return 1;
         for (uint32_t i = 0; i < af.samplesize; i++) {
             srcf.push_back((double)af.samples[i]);
         }
         sw.setSource(srcf,src);
     }
     if(!dst.empty()) {
-        if (! af.getAudioFile(dst.c_str(), sw.getSampleRate()) ) return 1;
+        if (! af.getAudioFile(dst.c_str(), sr) ) return 1;
         for (uint32_t i = 0; i < af.samplesize; i++) {
             dstf.push_back((double)af.samples[i]);
         }
         sw.setRef(dstf,dst);
     }
 
-    ip.computeIR(dstf, srcf, 48000, 4096, true);
+    ip.computeIR(dstf, srcf, sr, 4096, true);
 
-    sw.show();
-    jack.stop();
+    if(!ir_file.empty()) {
+        while (!ip.workerReady) 
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        std::vector<double> ir = ip.createIR();
+        af.saveAudioFile(ir_file, ir, ir.size(), sr);
+        std::cout << "save as: " << ir_file << std::endl;
+    } else {
+        sw.show();
+        jack.stop();
+    }
 
     printf("bye bye\n");
     return 0;
