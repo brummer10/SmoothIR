@@ -133,13 +133,18 @@ public:
         for (auto& v : mag_ir_) v -= peak;
 
         if (solo_enabled) {
-            if (bands[solo_band].enabled)
+            if (bands[solo_band].enabled) {
                 mag_ir_ = buildBandSoloIR(bands[solo_band], sampleRate);
+                mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
+            }
         } else {
             for (auto& b : bands) {
-                if (b.enabled)
-                    if (b.mute )
+                if (b.enabled) {
+                    if (b.mute ) {
                         mag_ir_ = buildBandRemovedIR(b, sampleRate);
+                        mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
+                    }
+                }
             }
         }
 

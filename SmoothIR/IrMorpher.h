@@ -45,7 +45,7 @@ public:
     // change impulse response file
     void setIR(const std::vector<double>& ir) {
         convB->setIR(ir);
-        prerollBlocksTotal = convB->getNumParts();
+        prerollBlocksTotal = convB->getNumParts() * 2;
         prerollCounter = 0;
         prerolling = true;
         IrReady.store(true, std::memory_order_release);
@@ -65,14 +65,14 @@ public:
         convA->process(input, (float*)bufferA.data());
 
         if (!prerolling) {
-            std::memcpy(output, bufferA.data(), sizeof(double) * B);
+            std::memcpy(output, bufferA.data(), sizeof(float) * B);
             return;
         }
         // preroll
         convB->process(input, (float*)bufferB.data());
         prerollCounter++;
         if (prerollCounter < prerollBlocksTotal) {
-            std::memcpy(output, bufferA.data(), sizeof(double) * B);
+            std::memcpy(output, bufferA.data(), sizeof(float) * B);
             return;
         }
 
@@ -91,7 +91,6 @@ public:
         // switch
         convA.swap(convB);
         prerolling = false;
-        std::memcpy(output, bufferB.data(), sizeof(double) * B);
     }
 
 private:
@@ -100,8 +99,8 @@ private:
 
     size_t B = 0;
 
-    std::vector<double> bufferA;
-    std::vector<double> bufferB;
+    std::vector<float> bufferA;
+    std::vector<float> bufferB;
 
     std::atomic<bool> IrReady {false};
     int bypass = 0;
