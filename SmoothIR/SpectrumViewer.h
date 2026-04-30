@@ -90,7 +90,21 @@ public:
         for (int i = 0; i<6; i++) {
             frame[i] = add_my_frame(top,"", x, 331, 133, 100);
 
-            ftype[i] = add_type_combobox(frame[i], "Type", 10, 5, 95, 20);
+            solo[i] = add_my_toggle_button(frame[i], 5, 5, 20, 20, "S");
+            solo[i]->data = i;
+            solo[i]->flags |= IS_RADIO;
+            solo[i]->flags |= USE_TRANSPARENCY | FAST_REDRAW;
+            solo[i]->parent_struct = this;
+            solo[i]->func.value_changed_callback = solo_response;
+
+            mute[i] = add_my_toggle_button(frame[i], 25, 5, 20, 20, "M");
+            mute[i]->data = i;
+            mute[i]->flags |= IS_RADIO;
+            mute[i]->flags |= USE_TRANSPARENCY | FAST_REDRAW;
+            mute[i]->parent_struct = this;
+            mute[i]->func.value_changed_callback = mute_response;
+
+            ftype[i] = add_type_combobox(frame[i], "Type", 50, 5, 55, 20);
             ftype[i]->data = i;
             ftype[i]->parent_struct = this;
             combobox_add_entry(ftype[i],"Low Shelf");
@@ -105,7 +119,7 @@ public:
             }
             ftype[i]->func.value_changed_callback = set_ftype;
 
-            fenable[i] = add_my_enable_button(frame[i], 107, 5, 20, 20, "");
+            fenable[i] = add_my_enable_button(frame[i], 108, 5, 20, 20, "");
             fenable[i]->data = i;
             fenable[i]->parent_struct = this;
             fenable[i]->func.value_changed_callback = set_fenable;
@@ -251,19 +265,23 @@ public:
 
         Atom WM_DELETE_WINDOW = os_register_wm_delete_window(top);
         run = true;
-        int check = 1;
+        int check = 0;
         while (run) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
-            check ^= 1;
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            check += 1;
             XEvent xev;
             if (XCheckTypedWindowEvent(main.dpy, top->widget, ClientMessage, &xev)){
                 if (xev.xclient.data.l[0] == (long int)WM_DELETE_WINDOW) {
                     quitGui();
                 }
             }
-            if (check) check_leak();
-            check_irmatch();
+            if (check > 6) {
+                check = 0;
+                check_leak();
+            }
+            check_spec();
             os_run_embedded(&main);
+            check_irmatch();
         }
 
         main_quit(&main);
@@ -295,6 +313,8 @@ private:
     Widget_t* freq[6];
     Widget_t* fq[6];
     Widget_t* fgain[6];
+    Widget_t* solo[6];
+    Widget_t* mute[6];
     Widget_t* vumeter = nullptr;
     IRProcessor *ip = nullptr;
     IRMorpher *conv = nullptr;
@@ -335,8 +355,8 @@ private:
         }
     }
 
-    void check_irmatch() {
 
+    void check_spec() {
         adj_set_value(vumeter->adj, power2db(vumeter, vu->getMeter()));
         if (ana->hasNewData()) {
             bin = ana->getBins();
@@ -348,7 +368,9 @@ private:
             ana->clearFlag();
             expose_widget(spec);
         }
+    }
 
+    void check_irmatch() {
         if (ip->workerReady.load(std::memory_order_acquire)) {
             ip->workerReady.store(false, std::memory_order_release);
             setData(ip->getRefMag(), ip->getSrcMag(), 
@@ -379,6 +401,49 @@ private:
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         self->conv->setBypass((int)adj_get_value(w->adj));
+    }
+
+    void set_radio(Widget_t* w, bool set) {
+         for (int i = 0; i<6; i++) {
+            Widget_t *wid = solo[i];
+            if (wid != w) {
+                xevfunc store = wid->func.value_changed_callback;
+                wid->func.value_changed_callback = null_callback;
+                adj_set_value(wid->adj, 0.0);
+                ip->setSoloBand(wid->data, (int)adj_get_value(wid->adj));
+                wid->func.value_changed_callback = store;
+            }
+        }
+        if (set) {
+            Widget_t * p = (Widget_t*)w->parent;
+            int i = 0;
+            for(;i<p->childlist->elem;i++) {
+                Widget_t *wid = p->childlist->childs[i];
+                if (wid->adj && wid->flags & IS_RADIO) {
+                    xevfunc store = wid->func.value_changed_callback;
+                    wid->func.value_changed_callback = null_callback;
+                    if (wid != w) adj_set_value(wid->adj, 0.0);
+                    ip->setMuteBand(wid->data, (int)adj_get_value(wid->adj));
+                    wid->func.value_changed_callback = store;
+                }
+            }
+        }
+    }
+
+    static void solo_response(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->set_radio(w, true);
+        self->ip->setSoloBand(w->data, (int)adj_get_value(w->adj));
+        self->set_leak.store(true, std::memory_order_release);
+    }
+
+    static void mute_response(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->set_radio(w, false);
+        self->ip->setMuteBand(w->data, (int)adj_get_value(w->adj));
+        self->set_leak.store(true, std::memory_order_release);
     }
 
     static void set_ftype(void *w_, void* user_data) {

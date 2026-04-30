@@ -14,6 +14,10 @@
 extern "C" {
 #endif
 
+static void null_call(void *w_, void *user_data) {
+    
+}
+
 // knob
 static void show_label(Widget_t *w, int width, int height) {
     //use_text_color_scheme(w, get_color_state(w));
@@ -278,9 +282,168 @@ void draw_combobox_button(void *w_, void* user_data) {
    
 }
 
+
+void draw_eq_combobox(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    if (!w) return;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    int width = metrics.width-2;
+    int height = metrics.height-2;
+    if (!metrics.visible) return;
+    int v = (int)adj_get_value(w->adj);
+    int vl = v - (int) w->adj->min_value;
+   // if (v<0) return;
+    Widget_t * menu = w->childlist->childs[1];
+    Widget_t* view_port =  menu->childlist->childs[0];
+    ComboBox_t *comboboxlist = (ComboBox_t*)view_port->parent_struct;
+
+    cairo_rectangle(w->crb,2.0, 2.0, width, height);
+
+    if(w->state==0) {
+        cairo_set_line_width(w->crb, 1.0);
+        use_shadow_color_scheme(w, NORMAL_);
+        cairo_fill_preserve(w->crb);
+        use_frame_color_scheme(w, NORMAL_);
+    } else if(w->state==1) {
+        use_shadow_color_scheme(w, PRELIGHT_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.5);
+        use_frame_color_scheme(w, NORMAL_);
+    } else if(w->state==2) {
+        use_shadow_color_scheme(w, SELECTED_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.0);
+        use_frame_color_scheme(w, SELECTED_);
+    } else if(w->state==3) {
+        use_shadow_color_scheme(w, ACTIVE_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.0);
+        use_frame_color_scheme(w, ACTIVE_);
+    } else if(w->state==4) {
+        use_shadow_color_scheme(w, INSENSITIVE_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.0);
+        use_frame_color_scheme(w, INSENSITIVE_);
+    }
+    cairo_stroke(w->crb);
+
+    cairo_rectangle(w->crb,4.0, 4.0, width, height);
+    cairo_stroke(w->crb);
+    cairo_rectangle(w->crb,3.0, 3.0, width, height);
+    cairo_stroke(w->crb);
+    if (comboboxlist->list_size<1) return;
+    if (vl<0) return;
+
+    int width_t, height_t;
+    os_get_surface_size(w->image, &width_t, &height_t);
+    double x = (double)height/(double)height_t;
+    double y = (double)height_t/(double)height;
+
+    int findex = 2 - vl;
+    int frame = width_t/3;
+
+    cairo_save(w->crb);
+    cairo_scale(w->crb, x,x);
+    cairo_set_source_surface (w->crb, w->image, -frame*findex, 0);
+    cairo_rectangle(w->crb, 0, 0, frame, height_t);
+    cairo_fill(w->crb);
+    cairo_scale(w->crb, y,y);
+    cairo_restore(w->crb);
+
+}
+
+void draw_eq_menu(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    int width = metrics.width;
+    int height = metrics.height;
+    if (!metrics.visible) return;
+    ComboBox_t *comboboxlist = (ComboBox_t*)w->parent_struct;
+    Widget_t *p = comboboxlist->combobox;
+    use_base_color_scheme(w, NORMAL_);
+    cairo_rectangle(w->crb, 0, 0, width, height);
+    cairo_fill (w->crb);
+
+    int i = (int)max(0,adj_get_value(w->adj));
+    int a = 0;
+    int j = (int)comboboxlist->list_size < comboboxlist->show_items+i+1 ? 
+      comboboxlist->list_size : comboboxlist->show_items+i+1;
+    for(;i<j;i++) {
+        if(i == comboboxlist->prelight_item && i == comboboxlist->active_item)
+            use_base_color_scheme(w, ACTIVE_);
+        else if(i == comboboxlist->prelight_item)
+            use_base_color_scheme(w, PRELIGHT_);
+        else if (i == comboboxlist->active_item)
+            use_base_color_scheme(w, SELECTED_);
+        else
+            use_base_color_scheme(w,NORMAL_ );
+        cairo_rectangle(w->crb, 0, a*comboboxlist->item_height, width, comboboxlist->item_height);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.0);
+        use_frame_color_scheme(w, PRELIGHT_);
+        cairo_stroke(w->crb); 
+        //cairo_text_extents_t extents;
+        /** show label **/
+        
+        int width_t, height_t;
+        os_get_surface_size(p->image, &width_t, &height_t);
+        double x = (double)comboboxlist->item_height/(double)height_t;
+        double y = (double)height_t/(double)comboboxlist->item_height;
+
+        int findex = 2 - i;
+        int frame = width_t/3;
+
+        cairo_save(w->crb);
+        cairo_scale(w->crb, x,x);
+        cairo_set_source_surface (w->crb, p->image, -frame*findex, (a*comboboxlist->item_height)* y);
+        cairo_rectangle(w->crb, 0, (a*comboboxlist->item_height)* y, frame, height_t);
+        cairo_fill(w->crb);
+        cairo_scale(w->crb, y,y);
+        cairo_restore(w->crb);
+        
+        /*
+        if(i == comboboxlist->prelight_item && i == comboboxlist->active_item)
+            use_text_color_scheme(w, ACTIVE_);
+        else if(i == comboboxlist->prelight_item)
+            use_text_color_scheme(w, PRELIGHT_);
+        else if (i == comboboxlist->active_item)
+            use_text_color_scheme(w, SELECTED_);
+        else
+            use_text_color_scheme(w,NORMAL_ );
+
+        cairo_set_font_size (w->crb, (int)(w->app->normal_font/comboboxlist->sc));
+        cairo_text_extents(w->crb,"Ay", &extents);
+        double h = extents.height;
+        cairo_text_extents(w->crb,comboboxlist->list_names[i] , &extents);
+
+        cairo_move_to (w->crb, 15, (comboboxlist->item_height*(a+1)) - h + 6 * w->app->hdpi);
+        cairo_show_text(w->crb, comboboxlist->list_names[i]);
+        cairo_new_path (w->crb);
+        if (i == comboboxlist->prelight_item && extents.width > (float)width-20) {
+            tooltip_set_text(w,comboboxlist->list_names[i]);
+            w->flags |= HAS_TOOLTIP;
+            show_tooltip(w);
+        } else if (i == comboboxlist->prelight_item && extents.width < (float)width-20) {
+            w->flags &= ~HAS_TOOLTIP;
+            hide_tooltip(w);
+        }*/
+        a++;
+    }
+}
+
 Widget_t* add_type_combobox(Widget_t *p,const char * label,
                                 int x, int y, int width, int height) {
     Widget_t* w = add_combobox(p, label, x, y, width, height);
+    Widget_t * menu = w->childlist->childs[1];
+    Widget_t* view_port =  menu->childlist->childs[0];
+    ComboBox_t *comboboxlist = (ComboBox_t*)view_port->parent_struct;
+    comboboxlist->slider->func.expose_callback = null_call;
+
+    widget_get_png(w, LDVAR(filters_png));
+    w->func.expose_callback = draw_eq_combobox;
+    view_port->func.expose_callback = draw_eq_menu;
     w->childlist->childs[0]->func.expose_callback = draw_combobox_button;
     return w;
 }

@@ -44,5 +44,6 @@ endif
 
 clean:
 	@rm -f ./libxputty/xputty/resources/smoothir.png
+	@rm -f ./libxputty/xputty/resources/filters.png
 
 features:
