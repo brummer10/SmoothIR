@@ -34,9 +34,25 @@ public:
     using CVec = std::vector<Complex>;
     using Vec  = std::vector<double>;
 
+    std::atomic<bool> workerReady {false};
+    std::atomic<bool> workerBusy {false};
+
     ~IRProcessor() {
         stopWorker();
     }
+
+    IRProcessor() {
+        front.store(&bufferA);
+        back = &bufferB;
+        startWorker();
+    }
+
+    struct alignas(64) IRData {
+        Vec ref;
+        Vec diff;
+        Vec src;
+        double peak = 0.0;
+    };
 
     Band bands[6] = {
         // Low Shelf
@@ -52,11 +68,6 @@ public:
         // High Shelf
         {0, Band::HighShelf, 10000.0, 0.0, 0.7, 0}
     };
-
-    std::atomic<bool> workerReady {false};
-    std::atomic<bool> workerBusy {false};
-    static constexpr double EPS = 1e-12;
-    size_t irLength = 2048;
 
     void computeIR(const Vec& reference, const Vec& source, double sampleRate_,
                    size_t irLength_ = 4096, bool rebuild = false, size_t fftSize = 0) {
@@ -82,74 +93,6 @@ public:
         updateIR(ref_trunc, src_trunc, rebuild);
     }
 
-    void aplayFilter() {
-        if (!last_diff_.size()) return;
-
-        mag_ir_.assign(last_diff_.begin(), last_diff_.end());
-
-        if(lowcut_enabled) {
-            apply_low_rolloff(mag_ir_, sampleRate, lowcut);
-        } else if (haveSource || haveReference) {
-            apply_low_rolloff(mag_ir_, sampleRate, 30.0);
-        }
-        if(highcut_enabled) apply_high_rolloff(mag_ir_, sampleRate, highcut);
-        
-        for (auto& b : bands) {
-            if (b.enabled) {
-                switch (b.type) {
-                    case Band::Peak:
-                        apply_peak(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
-                        break;
-
-                    case Band::LowShelf:
-                        apply_low_shelf(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
-                        break;
-
-                    case Band::HighShelf:
-                        apply_high_shelf(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
-                        break;
-                }
-            }
-        }
-        
-        //apply_peak(mag_ir_, sampleRate, 1000.0, -24.0, 1.0); // Q 0.0 - 5  
-        Vec smooth = adaptive_log_smooth(mag_ir_, sampleRate);
-        mag_ir_ = lerpv(mag_ir_, smooth, smooth_amount);
-        mag_ir_ = spectral_dynamics(mag_ir_, dynamics_amount, tilt_amount, sampleRate);
-        //mag_ir_ = adaptive_log_smooth(mag_ir_, sampleRate * 0.001);
-        //mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
-        //mag_ir_ = soften_peaks(mag_ir_, 0.2);
-
-        Vec ir_ = createIR();
-        CVec c(n);
-        for (size_t i = 0; i < ir_.size(); ++i)
-            c[i] = ir_[i];
-        CVec f3 = fft(c);
-        
-        mag_ir_.clear();
-        mag_ir_ = magnitude_db(f3);
-
-        //peak = std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
-        for (auto& v : mag_ir_) v -= peak;
-
-        if (solo_enabled) {
-            if (bands[solo_band].enabled) {
-                mag_ir_ = buildBandSoloIR(bands[solo_band], sampleRate);
-                mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
-            }
-        } else {
-            for (auto& b : bands) {
-                if (b.enabled) {
-                    if (b.mute ) {
-                        mag_ir_ = buildBandRemovedIR(b, sampleRate);
-                        mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
-                    }
-                }
-            }
-        }
-
-    }
-
     Vec createIR() {
         CVec Hs = spectrum2fft(mag_ir_);
         CVec Hmin = mps(Hs);
@@ -167,14 +110,95 @@ public:
         CVec Hs = spectrum2fft(mag);
         CVec Hmin = mps(Hs);
         CVec ir_full = ifft(Hmin);
-
+        size_t tail = std::min<size_t>(64, irLength / 4);
+        apply_window(ir_full, tail);
         Vec ir(irLength);
-
         for (size_t i = 0; i < irLength; ++i)
             ir[i] = ir_full[i].real();
-
         normalize(ir);
         return ir;
+    }
+
+    const Vec& getIRMag() const { return mag_ir_; }
+
+    const Vec& getDiffMag() const {
+        return front.load(std::memory_order_acquire)->diff;
+    }
+
+    const Vec& getRefMag() const {
+        return front.load(std::memory_order_acquire)->ref;
+    }
+
+    const Vec& getSrcMag() const {
+        return front.load(std::memory_order_acquire)->src;
+    }
+
+    void setLowCut(double lc) { lowcut = lc; }
+    void setLowCutEnabled(int lc) { lowcut_enabled = lc; }
+    void setHighCut(double hc) { highcut = hc; }
+    void setHighCutEnabled(int hc) { highcut_enabled = hc; }
+    void setSmooth(double sc) { smooth_amount = sc; }
+    void setDynamics(double cc) { dynamics_amount = cc; }
+    void setTilt(double tc) { tilt_amount = tc; }
+    void setIrLength(size_t length) { irLength = length; }
+    void setFtype(int i, int ft) { bands[i].type = (Band::Type)ft; }
+    void setFreq(int i, double f) { bands[i].freq = f; }
+    void setFq(int i, double q) { bands[i].Q = q; }
+    void setFgain(int i, double g) { bands[i].gain = g; }
+    void setFenable(int i, int e) { bands[i].enabled = e; }
+    void setMuteBand(int i, int e) { bands[i].mute = e; }
+
+    void setSoloBand(int i, int e) {
+        solo_band = i;
+        solo_enabled = e;
+    }
+
+private:
+    Vec mag_ir_;
+    size_t n = 0;
+    static constexpr double EPS = 1e-12;
+    static constexpr double lowEndCutoff = 150.0;
+    size_t irLength = 4096;
+    bool haveSource = false;
+    bool haveReference = false;
+    double peak = 0.0;
+    double lowcut = 100.0;
+    double highcut = 4000.0;
+    double smooth_amount = 0.3;
+    double dynamics_amount = 0.0;
+    double tilt_amount = 0.0;
+    double sampleRate = 48000.0;
+    int lowcut_enabled = 0;
+    int highcut_enabled = 0;
+    int solo_band = 0;
+    int solo_enabled = 0;
+
+    IRData bufferA;
+    IRData bufferB;
+    std::atomic<IRData*> front { nullptr };
+    IRData* back = nullptr;
+
+    std::thread workerThread;
+    std::atomic<bool> running { true };
+    std::atomic<bool> hasWork { false };
+    std::mutex workMutex;
+    Vec pendingReference;
+    Vec pendingSource;
+    bool pendingRebuild = false;
+    std::condition_variable cv;
+    std::mutex cvMutex;
+
+    static Vec center_crop(const Vec& in, size_t size) {
+        if (in.size() <= size)
+            return in;
+
+        size_t start = (in.size() - size) / 2;
+        return Vec(in.begin() + start, in.begin() + start + size);
+    }
+
+    void make_flat(Vec& v, size_t bins, double db = 0.0) {
+        v.clear();
+        v.assign(bins, db);
     }
 
     static inline double db_edge_fade(double db, double threshold, double width) {
@@ -220,6 +244,7 @@ public:
                     } else {
                         mask = 0.0;
                     }
+                    db += 12.0;
                     break;
                 }
                 case Band::LowShelf:
@@ -228,6 +253,7 @@ public:
                     if (x < -edgeWidth) mask = 1.0;
                     else if (x < edgeWidth) mask = 1.0 - edge_fade(x, edgeWidth);
                     else mask = 0.0;
+                    db += 12.0;
                     break;
                 }
                 case Band::HighShelf:
@@ -236,6 +262,7 @@ public:
                     if (x > edgeWidth) mask = 1.0;
                     else if (x > -edgeWidth) mask = edge_fade(x, edgeWidth);
                     else mask = 0.0;
+                    db += 12.0;
                     break;
                 }
             }
@@ -246,7 +273,7 @@ public:
         return mag;
     }
 
-    Vec buildBandRemovedIR(const Band& b, double sr) {
+    Vec buildBandMuteIR(const Band& b, double sr) {
         size_t n = mag_ir_.size();
         Vec mag = mag_ir_;
         const double nyquist = sr * 0.5;
@@ -295,223 +322,206 @@ public:
         return mag;
     }
 
-    const Vec& getIRMag() const { return mag_ir_; }
-    const Vec& getDiffMag() const { return last_diff_; }
-    const Vec& getRefMag() const { return last_ref_; }
-    const Vec& getSrcMag() const { return last_src_; }
+    void aplayFilter() {
+        if (!mag_ir_.size()) return;
 
-    CVec fft(const CVec& in) const {
-        int N = (int)in.size();
+        double lowcut_ = lowcut;
+        double highcut_ = highcut;
+        double smooth_amount_ = smooth_amount;
+        double dynamics_amount_ = dynamics_amount;
+        double tilt_amount_ = tilt_amount;
+        int lowcut_enabled_ = lowcut_enabled;
+        int highcut_enabled_ = highcut_enabled;
+        int solo_band_ = solo_band;
+        int solo_enabled_ = solo_enabled;
 
-        fftw_complex *input = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
-        fftw_complex *output = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
-
-        for (int i = 0; i < N; ++i) {
-            input[i][0] = in[i].real();
-            input[i][1] = in[i].imag();
+        if(lowcut_enabled_) {
+            apply_low_rolloff(mag_ir_, sampleRate, lowcut_);
+        } else if (haveSource || haveReference) {
+            apply_low_rolloff(mag_ir_, sampleRate, 30.0);
         }
+        if(highcut_enabled_) apply_high_rolloff(mag_ir_, sampleRate, highcut_);
 
-        fftw_plan p = fftw_plan_dft_1d(N, input, output, FFTW_FORWARD, FFTW_ESTIMATE);
-        fftw_execute(p);
+        Band localBands[6];
+        std::copy(std::begin(bands), std::end(bands), std::begin(localBands));
 
-        CVec out(N);
-        for (int i = 0; i < N; ++i)
-            out[i] = Complex(output[i][0], output[i][1]);
+        for (auto& b : localBands) {
+            if (b.enabled) {
+                switch (b.type) {
+                    case Band::Peak:
+                        apply_peak(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
+                        break;
 
-        fftw_destroy_plan(p);
-        fftw_free(input);
-        fftw_free(output);
+                    case Band::LowShelf:
+                        apply_low_shelf(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
+                        break;
 
-        return out;
-    }
-
-    CVec ifft(const CVec& in) const {
-        int N = (int)in.size();
-
-        fftw_complex *input = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
-        fftw_complex *output = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
-
-        for (int i = 0; i < N; ++i) {
-            input[i][0] = in[i].real();
-            input[i][1] = in[i].imag();
+                    case Band::HighShelf:
+                        apply_high_shelf(mag_ir_, sampleRate, b.freq, b.gain, b.Q);
+                        break;
+                }
+            }
         }
+        
+        //apply_peak(mag_ir_, sampleRate, 1000.0, -24.0, 1.0); // Q 0.0 - 5  
+        Vec smooth = adaptive_log_smooth(mag_ir_, sampleRate);
+        mag_ir_ = lerpv(mag_ir_, smooth, smooth_amount_);
+        mag_ir_ = spectral_dynamics(mag_ir_, dynamics_amount_, tilt_amount_, sampleRate);
+        //mag_ir_ = adaptive_log_smooth(mag_ir_, sampleRate * 0.001);
+        //mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
+        //mag_ir_ = soften_peaks(mag_ir_, 0.2);
 
-        fftw_plan p = fftw_plan_dft_1d(N, input, output, FFTW_BACKWARD, FFTW_ESTIMATE);
-        fftw_execute(p);
+        Vec ir_ = createIR();
+        CVec c(n);
+        for (size_t i = 0; i < ir_.size(); ++i)
+            c[i] = ir_[i];
+        CVec f3 = fft(c);
+        
+        mag_ir_.clear();
+        mag_ir_ = magnitude_db(f3);
 
-        CVec out(N);
-        for (int i = 0; i < N; ++i)
-            out[i] = Complex(output[i][0] / N, output[i][1] / N);
+        if (!haveSource && ! haveReference)
+            peak = std::max(peak, *std::max_element(mag_ir_.begin(), mag_ir_.end()));
+        for (auto& v : mag_ir_) v -= peak;
 
-        fftw_destroy_plan(p);
-        fftw_free(input);
-        fftw_free(output);
-
-        return out;
+        if (solo_enabled_) {
+            if (localBands[solo_band_].enabled) {
+                mag_ir_ = buildBandSoloIR(localBands[solo_band_], sampleRate);
+                mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
+            }
+        } else {
+            for (auto& b : localBands) {
+                if (b.enabled) {
+                    if (b.mute ) {
+                        mag_ir_ = buildBandMuteIR(b, sampleRate);
+                        mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
+                    }
+                }
+            }
+        }
+        reconstruct_low_end(mag_ir_, sampleRate);
     }
 
-    void setLowCut(double lc) {
-        lowcut = lc;
-    }
-
-    void setLowCutEnabled(int lc) {
-        lowcut_enabled = lc;
-    }
-
-    void setHighCut(double hc) {
-        highcut = hc;
-    }
-
-    void setHighCutEnabled(int hc) {
-        highcut_enabled = hc;
-    }
-
-    void setSmooth(double sc) {
-        smooth_amount = sc;
-    }
-
-    void setDynamics(double cc) {
-        dynamics_amount = cc;
-    }
-
-    void setTilt(double tc) {
-        tilt_amount = tc;
-    }
-
-    void setIrLength(size_t length) {
-        irLength = length;
-    }
-
-    void setFtype(int i, int ft) {
-        bands[i].type = (Band::Type)ft;
-    }
-
-    void setFreq(int i, double f) {
-        bands[i].freq = f;
-    }
-
-    void setFq(int i, double q) {
-        bands[i].Q = q;
-    }
-
-    void setFgain(int i, double g) {
-        bands[i].gain = g;
-    }
-
-    void setFenable(int i, int e) {
-        bands[i].enabled = e;
-    }
-
-    void setSoloBand(int i, int e) {
-        solo_band = i;
-        solo_enabled = e;
-    }
-
-    void setMuteBand(int i, int e) {
-        bands[i].mute = e;
-    }
-
-private:
-    Vec mag_ir_;
-    Vec last_ref_;
-    Vec last_src_;
-    Vec last_diff_;
-    size_t n = 0;
-    bool haveSource = false;
-    bool haveReference = false;
-    double peak = 0.0;
-    double lowcut = 100.0;
-    double highcut = 4000.0;
-    double smooth_amount = 0.3;
-    double dynamics_amount = 0.0;
-    double tilt_amount = 0.0;
-    double sampleRate = 48000.0;
-    int lowcut_enabled = 0;
-    int highcut_enabled = 0;
-    int solo_band = 0;
-    int solo_enabled = 0;
-
-    std::thread workerThread;
-
-    static Vec center_crop(const Vec& in, size_t size) {
-        if (in.size() <= size)
-            return in;
-
-        size_t start = (in.size() - size) / 2;
-        return Vec(in.begin() + start, in.begin() + start + size);
-    }
-
-    void make_flat(Vec& v, size_t bins, double db = 0.0) {
-        v.clear();
-        v.assign(bins, db);
-    }
-
-    void stopWorker() {
-        if (workerThread.joinable())
-            workerThread.join();
-    }
-
-    void updateIR(const Vec& reference, const Vec& source, bool rebuild) {
+    void processIR(const Vec& reference, const Vec& source, bool rebuild, IRData& out) {
         workerBusy = true;
         workerReady = false;
 
+        if (!rebuild) {
+            if (IRData* current = front.load(std::memory_order_acquire)) {
+                out = *current;
+            }
+        }
+
+        if (rebuild) {
+            CVec a(n), b(n);
+
+            for (size_t i = 0; i < reference.size(); ++i)
+                a[i] = reference[i];
+
+            for (size_t i = 0; i < source.size(); ++i)
+                b[i] = source[i];
+
+            CVec f1 = fft(a);
+            CVec f2 = fft(b);
+
+            out.peak = 0.0;
+
+            if (haveSource && haveReference) {
+                CVec H = safe_divide(f1, f2);
+                out.diff = magnitude_db(H);
+            } else if (haveReference) {
+                out.diff = magnitude_db(f1);
+            } else if (haveSource) {
+                out.diff = magnitude_db(f2);
+            } else {
+                make_flat(out.ref, n / 2 + 1);
+                make_flat(out.diff, n / 2 + 1);
+                make_flat(out.src, n / 2 + 1);
+            }
+
+            if (haveSource || haveReference) {
+                out.diff = adaptive_log_smooth(out.diff, sampleRate);
+                out.diff = soften_peaks(out.diff, 0.2);
+                out.diff = harmonic_refine(out.diff, sampleRate);
+                reconstruct_low_end(out.diff, sampleRate);
+
+                out.ref = magnitude_db(f1);
+                out.ref = adaptive_log_smooth(out.ref, sampleRate);
+
+                out.src = magnitude_db(f2);
+                out.src = adaptive_log_smooth(out.src, sampleRate);
+
+                out.peak = std::max(
+                    *std::max_element(out.ref.begin(), out.ref.end()),
+                    *std::max_element(out.src.begin(), out.src.end())
+                );
+
+                for (auto& v : out.ref)  v -= out.peak;
+                for (auto& v : out.src)  v -= out.peak;
+                double peak_d = *std::max_element(out.diff.begin(), out.diff.end());
+                peak_d = peak_d < out.peak ? out.peak : peak_d;
+                for (auto& v : out.diff) v -= peak_d;
+            }
+        }
+
+        mag_ir_ = out.diff;
+        peak = out.peak;
+
+        aplayFilter();
+
+        workerReady = true;
+        workerBusy = false;
+    }
+
+    void stopWorker() {
+        running.store(false);
+        cv.notify_one();
+
         if (workerThread.joinable())
             workerThread.join();
-    
-        workerThread = std::thread([this, reference, source, rebuild]() {
-            if (rebuild) {
-                CVec a(n), b(n);
+    }
 
-                for (size_t i = 0; i < reference.size(); ++i)
-                    a[i] = reference[i];
-
-                for (size_t i = 0; i < source.size(); ++i)
-                    b[i] = source[i];
-
-                CVec f1 = fft(a);
-                CVec f2 = fft(b);
-
-                // reset normalise dB
-                peak = 0.0;
-
-                if (haveSource && haveReference) {
-                    CVec H = safe_divide(f1, f2);
-                    last_diff_ = magnitude_db(H);
-                } else if (haveReference) {
-                    last_diff_ = magnitude_db(f1);
-                } else if (haveSource) {
-                    last_diff_ = magnitude_db(f2);
-                } else {
-                    make_flat(last_ref_, n / 2 + 1);
-                    make_flat(last_diff_, n / 2 + 1);
-                    make_flat(last_src_, n / 2 + 1);
+    void startWorker() {
+        workerThread = std::thread([this]() {
+            while (running.load(std::memory_order_acquire)) {
+                {
+                    std::unique_lock<std::mutex> lock(cvMutex);
+                    cv.wait_for(lock, std::chrono::milliseconds(100), [this]() {
+                        return hasWork.load(std::memory_order_acquire) ||
+                               !running.load(std::memory_order_acquire);
+                    });
                 }
 
-                if (haveSource || haveReference) {
-                    last_diff_ = adaptive_log_smooth(last_diff_, sampleRate);
-                    last_diff_ = soften_peaks(last_diff_, 0.2);
-                    last_diff_ = harmonic_refine(last_diff_, sampleRate);
+                if (!running.load()) break;
+                if (!hasWork.exchange(false)) continue;
 
-                    last_ref_ = magnitude_db(f1);
-                    last_ref_ = adaptive_log_smooth(last_ref_, sampleRate);
-                    last_src_ = magnitude_db(f2);
-                    last_src_ = adaptive_log_smooth(last_src_, sampleRate);
-
-                    peak = std::max(
-                        *std::max_element(last_ref_.begin(), last_ref_.end()),
-                        *std::max_element(last_src_.begin(), last_src_.end())
-                    );
-                    for (auto& v : last_ref_) v -= peak;
-                    for (auto& v : last_src_) v -= peak;
-                    //peak =  std::max(peak, *std::max_element(last_diff_.begin(), last_diff_.end()));
-                    for (auto& v : last_diff_) v -= peak;
+                Vec reference, source;
+                bool rebuild;
+                {
+                    std::lock_guard<std::mutex> lock(workMutex);
+                    reference = pendingReference;
+                    source = pendingSource;
+                    rebuild = pendingRebuild;
                 }
+
+                processIR(reference, source, rebuild, *back);
+
+                IRData* oldFront = front.exchange(back, std::memory_order_acq_rel);
+                back = oldFront ? oldFront : (back == &bufferA ? &bufferB : &bufferA);
             }
-            aplayFilter();
-
-            workerReady = true;
-            workerBusy = false;
         });
+    }
+
+    void updateIR(const Vec& reference, const Vec& source, bool rebuild) {
+        {
+            std::lock_guard<std::mutex> lock(workMutex);
+            pendingReference = reference;
+            pendingSource = source;
+            pendingRebuild = rebuild;
+        }
+
+        hasWork.store(true, std::memory_order_release);
+        cv.notify_one();
     }
 
     static Vec lerpv(const Vec& a, const Vec& b, double t) {
@@ -804,6 +814,91 @@ private:
         }
     }
 
+    static void build_log_points(const Vec& mag, Vec& xs, Vec& ys,
+                                    double sr, int numPoints = 16) {
+        size_t n = mag.size();
+        double nyquist = sr * 0.5;
+        double fMin = 20.0;
+        double fMax = 150.0;
+        xs.resize(numPoints);
+        ys.resize(numPoints);
+
+        for (int i = 0; i < numPoints; ++i) {
+            double t = (double)i / (numPoints - 1);
+            double f = fMin * std::pow(fMax / fMin, t);
+            size_t idx = (size_t)((f / nyquist) * (n - 1));
+            idx = std::clamp(idx, (size_t)1, n - 1);
+            xs[i] = std::log(f);
+            ys[i] = mag[idx];
+        }
+    }
+
+    static void clamp_outliers(Vec& ys) {
+        for (size_t i = 1; i < ys.size() - 1; ++i) {
+            double lo = std::min(ys[i - 1], ys[i + 1]);
+            double hi = std::max(ys[i - 1], ys[i + 1]);
+            ys[i] = std::clamp(ys[i], lo, hi);
+        }
+    }
+
+    static void smooth_points(Vec& ys)
+    {
+        Vec tmp = ys;
+        for (size_t i = 1; i < ys.size() - 1; ++i) {
+            ys[i] = 0.25 * tmp[i - 1] + 0.5 * tmp[i] + 0.25 * tmp[i + 1];
+        }
+    }
+
+    static double interp_monotonic( const Vec& xs, const Vec& ys, double x) {
+        size_t n = xs.size();
+
+        for (size_t i = 1; i < n; ++i) {
+            if (x <= xs[i]) {
+                double x0 = xs[i - 1];
+                double x1 = xs[i];
+                double y0 = ys[i - 1];
+                double y1 = ys[i];
+                double t = (x - x0) / (x1 - x0 + 1e-12);
+                double m = (y1 - y0);
+                return y0 + t * m;
+            }
+        }
+        return ys.back();
+    }
+
+    static void reconstruct_low_end(Vec& mag, double sr) {
+        size_t n = mag.size();
+        double nyquist = sr * 0.5;
+        size_t end = (size_t)((150.0 / nyquist) * (n - 1));
+        end = std::min(end, n - 1);
+        Vec xs, ys;
+        build_log_points(mag, xs, ys, sr, 16);
+        clamp_outliers(ys);
+        smooth_points(ys);
+
+        for (size_t i = 1; i < end; ++i) {
+            double f = (double)i / (n - 1) * nyquist;
+            double x = std::log(f + 1.0);
+            mag[i] = interp_monotonic(xs, ys, x);
+        }
+        mag[0] = mag[1];
+    }
+
+    static void smooth_low_end_log(Vec& mag, double sr) {
+        size_t n = mag.size();
+        size_t end = (size_t)((150.0 / (sr * 0.5)) * (n - 1));
+        end = std::min(end, n - 1);
+        Vec logMag = mag;
+        for (size_t i = 2; i < end; ++i) {
+            double a = logMag[i - 1];
+            double b = logMag[i];
+            double c = logMag[i + 1];
+            double smoothed = (a + b + c) / 3.0;
+            mag[i] = 0.7 * smoothed + 0.3 * b;
+        }
+        mag[0] = mag[1];
+    }
+
     static CVec spectrum2fft(const Vec& mag) {
         size_t n = 2 * (mag.size() - 1);
         CVec out(n);
@@ -875,6 +970,56 @@ private:
         CVec out = tmp.fft(cp);
         for (auto& v : out)
             v = std::exp(v);
+
+        return out;
+    }
+
+    CVec fft(const CVec& in) const {
+        int N = (int)in.size();
+
+        fftw_complex *input = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
+        fftw_complex *output = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
+
+        for (int i = 0; i < N; ++i) {
+            input[i][0] = in[i].real();
+            input[i][1] = in[i].imag();
+        }
+
+        fftw_plan p = fftw_plan_dft_1d(N, input, output, FFTW_FORWARD, FFTW_ESTIMATE);
+        fftw_execute(p);
+
+        CVec out(N);
+        for (int i = 0; i < N; ++i)
+            out[i] = Complex(output[i][0], output[i][1]);
+
+        fftw_destroy_plan(p);
+        fftw_free(input);
+        fftw_free(output);
+
+        return out;
+    }
+
+    CVec ifft(const CVec& in) const {
+        int N = (int)in.size();
+
+        fftw_complex *input = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
+        fftw_complex *output = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * N);
+
+        for (int i = 0; i < N; ++i) {
+            input[i][0] = in[i].real();
+            input[i][1] = in[i].imag();
+        }
+
+        fftw_plan p = fftw_plan_dft_1d(N, input, output, FFTW_BACKWARD, FFTW_ESTIMATE);
+        fftw_execute(p);
+
+        CVec out(N);
+        for (int i = 0; i < N; ++i)
+            out[i] = Complex(output[i][0] / N, output[i][1] / N);
+
+        fftw_destroy_plan(p);
+        fftw_free(input);
+        fftw_free(output);
 
         return out;
     }

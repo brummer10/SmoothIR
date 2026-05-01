@@ -62,14 +62,14 @@ public:
             return;
         }
 
-        convA->process(input, (float*)bufferA.data());
+        convA->process(input, bufferA.data());
 
         if (!prerolling) {
             std::memcpy(output, bufferA.data(), sizeof(float) * B);
             return;
         }
         // preroll
-        convB->process(input, (float*)bufferB.data());
+        convB->process(input, bufferB.data());
         prerollCounter++;
         if (prerollCounter < prerollBlocksTotal) {
             std::memcpy(output, bufferA.data(), sizeof(float) * B);
@@ -79,9 +79,9 @@ public:
         // fade
         for (size_t i = 0; i < B; ++i) {
             if (i < FADE_SAMPLES) {
-                double t = (double)i / (double)FADE_SAMPLES;
-                double gA = std::cos(t * M_PI * 0.5);
-                double gB = std::sin(t * M_PI * 0.5);
+                float t = (float)i / (float)FADE_SAMPLES;
+                float gA = std::cos(t * M_PI * 0.5);
+                float gB = std::sin(t * M_PI * 0.5);
                 output[i] = bufferA[i] * gA + bufferB[i] * gB;
             } else {
                 output[i] = bufferB[i];

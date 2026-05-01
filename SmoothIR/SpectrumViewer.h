@@ -267,7 +267,7 @@ public:
         run = true;
         int check = 0;
         while (run) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
             check += 1;
             XEvent xev;
             if (XCheckTypedWindowEvent(main.dpy, top->widget, ClientMessage, &xev)){
@@ -919,8 +919,9 @@ private:
             auto& b = ip->bands[i];
             if (!b.enabled) continue;
             bool isStarted = false;
-            double startX = 0.0f;
-            double stopX = 0.0f;
+            double startX = 0.0;
+            double stopX = 0.0;
+            double lastX = 0.0;
             // band color
             double r,g,bcol;
             get_band_color(i, r, g, bcol);
@@ -934,8 +935,9 @@ private:
                 if (!isStarted) {
                     cairo_move_to(cr, x, y);
                     startX = x;
+                    lastX = x;
                     isStarted = true;
-                } else {
+                } else if (x > lastX + 0.8) {
                     cairo_line_to(cr, x, y);
                 }
                 stopX = x;
