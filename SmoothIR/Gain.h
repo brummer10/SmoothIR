@@ -1,4 +1,12 @@
 
+/*
+ * Gain.h
+ *
+ * SPDX-License-Identifier:  BSD-3-Clause
+ *
+ * Copyright (C) 2026 brummer <brummer@web.de>
+ */
+
 #include <cmath>
 
 

@@ -43,7 +43,7 @@ int main(int argc, char *argv[]){
 
     std::vector<double> srcf;
     std::vector<double> dstf;
-
+    bool run = false;
 
     if (!cmd.parseCmdLine(argc, argv)) {
         cmd.printUsage(argv[0]);
@@ -56,7 +56,7 @@ int main(int argc, char *argv[]){
     int sr = cmd.opt.sampleRate.value_or(48000);
 
     if(ir_file.empty()) {
-        jack.start();
+        run = jack.start();
         sr = sw.getSampleRate();
     }
 
@@ -83,7 +83,7 @@ int main(int argc, char *argv[]){
         std::vector<double> ir = ip.createIR();
         af.saveAudioFile(ir_file, ir, ir.size(), sr);
         std::cout << "save as: " << ir_file << std::endl;
-    } else {
+    } else if (run) {
         sw.show();
         jack.stop();
     }

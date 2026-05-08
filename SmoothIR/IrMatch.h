@@ -88,13 +88,15 @@ public:
         Vec ref_trunc = center_crop(reference, maxAnalysisSize);
         Vec src_trunc = center_crop(source, maxAnalysisSize);
         
-        n = (fftSize > 0) ? fftSize : next_pow2(std::max<size_t>(ref_trunc.size(), src_trunc.size()));
-        n = std::max<size_t>(n, irLength * 2);
+        analysisN = (fftSize > 0) ? fftSize : next_pow2(std::max<size_t>(ref_trunc.size(), src_trunc.size()));
+        analysisN = std::max<size_t>(analysisN, irLength * 2);
+        synthesisN = next_pow2(irLength * 2);
         updateIR(ref_trunc, src_trunc, rebuild);
     }
 
     Vec createIR() {
-        CVec Hs = spectrum2fft(mag_ir_);
+        Vec synthMag = remap_mag_bins(mag_ir_, analysisN, synthesisN);
+        CVec Hs = spectrum2fft(synthMag);
         CVec Hmin = mps(Hs);
         CVec ir_full = ifft(Hmin);
         size_t tail = std::min<size_t>(64, irLength / 4);
@@ -155,7 +157,8 @@ public:
 
 private:
     Vec mag_ir_;
-    size_t n = 0;
+    size_t analysisN = 0;
+    size_t synthesisN = 0;
     static constexpr double EPS = 1e-12;
     static constexpr double lowEndCutoff = 150.0;
     size_t irLength = 4096;
@@ -187,6 +190,23 @@ private:
     bool pendingRebuild = false;
     std::condition_variable cv;
     std::mutex cvMutex;
+
+    static Vec remap_mag_bins(const Vec& in, size_t analysisN, size_t synthesisN) {
+        size_t outBins = synthesisN / 2 + 1;
+        size_t inBins  = in.size();
+        Vec out(outBins);
+
+        for (size_t i = 0; i < outBins; ++i) {
+            double freqNorm = (double)i / (double)(outBins - 1);
+            double srcPos = freqNorm * (double)(inBins - 1);
+            size_t idx0 = (size_t)srcPos;
+            size_t idx1 = std::min(idx0 + 1, inBins - 1);
+            double frac = srcPos - (double)idx0;
+            out[i] = in[idx0] * (1.0 - frac) + in[idx1] * frac;
+        }
+
+        return out;
+    }
 
     static Vec center_crop(const Vec& in, size_t size) {
         if (in.size() <= size)
@@ -371,18 +391,10 @@ private:
         //mag_ir_ = harmonic_refine(mag_ir_, sampleRate);
         //mag_ir_ = soften_peaks(mag_ir_, 0.2);
 
-        Vec ir_ = createIR();
-        CVec c(n);
-        for (size_t i = 0; i < ir_.size(); ++i)
-            c[i] = ir_[i];
-        CVec f3 = fft(c);
-        
-        mag_ir_.clear();
-        mag_ir_ = magnitude_db(f3);
-
-        if (!haveSource && ! haveReference)
+        if (!haveSource && ! haveReference) {
             peak = std::max(peak, *std::max_element(mag_ir_.begin(), mag_ir_.end()));
-        for (auto& v : mag_ir_) v -= peak;
+            for (auto& v : mag_ir_) v -= peak;
+        }
 
         if (solo_enabled_) {
             if (localBands[solo_band_].enabled) {
@@ -413,7 +425,7 @@ private:
         }
 
         if (rebuild) {
-            CVec a(n), b(n);
+            CVec a(analysisN), b(analysisN);
 
             for (size_t i = 0; i < reference.size(); ++i)
                 a[i] = reference[i];
@@ -434,16 +446,15 @@ private:
             } else if (haveSource) {
                 out.diff = magnitude_db(f2);
             } else {
-                make_flat(out.ref, n / 2 + 1);
-                make_flat(out.diff, n / 2 + 1);
-                make_flat(out.src, n / 2 + 1);
+                make_flat(out.ref, analysisN / 2 + 1);
+                make_flat(out.diff, analysisN / 2 + 1);
+                make_flat(out.src, analysisN / 2 + 1);
             }
 
             if (haveSource || haveReference) {
                 out.diff = adaptive_log_smooth(out.diff, sampleRate);
                 out.diff = soften_peaks(out.diff, 0.2);
                 out.diff = harmonic_refine(out.diff, sampleRate);
-                reconstruct_low_end(out.diff, sampleRate);
 
                 out.ref = magnitude_db(f1);
                 out.ref = adaptive_log_smooth(out.ref, sampleRate);
@@ -458,13 +469,13 @@ private:
 
                 for (auto& v : out.ref)  v -= out.peak;
                 for (auto& v : out.src)  v -= out.peak;
-                double peak_d = *std::max_element(out.diff.begin(), out.diff.end());
-                peak_d = peak_d < out.peak ? out.peak : peak_d;
-                for (auto& v : out.diff) v -= peak_d;
+                //double peak_d = *std::max_element(out.diff.begin(), out.diff.end());
+                //peak_d = peak_d < out.peak ? out.peak : peak_d;
+                for (auto& v : out.diff) v -= out.peak;
             }
         }
 
-        mag_ir_ = out.diff;
+        mag_ir_  = remap_mag_bins(out.diff, analysisN, synthesisN);
         peak = out.peak;
 
         aplayFilter();
@@ -665,6 +676,7 @@ private:
     Vec spectral_dynamics(const Vec& mag, double amount, double tilt, double sr) {
         Vec smooth = adaptive_log_smooth(mag, sr);
         Vec out = mag;
+        size_t n = mag.size();
         const double nyquist = sr * 0.5;
         const double max_boost = 12.0;
 
@@ -683,7 +695,7 @@ private:
             out[i] = smooth[i] + delta;
         }
         // dc block
-        if (mag.size() > 1) out[0] = out[1];
+        if (n > 1) out[0] = out[1];
         return out;
     }
 
@@ -841,8 +853,7 @@ private:
         }
     }
 
-    static void smooth_points(Vec& ys)
-    {
+    static void smooth_points(Vec& ys) {
         Vec tmp = ys;
         for (size_t i = 1; i < ys.size() - 1; ++i) {
             ys[i] = 0.25 * tmp[i - 1] + 0.5 * tmp[i] + 0.25 * tmp[i + 1];

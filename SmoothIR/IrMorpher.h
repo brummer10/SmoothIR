@@ -16,15 +16,15 @@
 #include <cstring>
 #include <atomic>
 
-#include "HybridConvolver.h"
+#include "HybridConvolverMT.h"
 
 class IRMorpher {
 public:
     IRMorpher(size_t blockSize = 256,
               size_t headSize  = 64) {
 
-        convA = std::make_unique<HybridConvolver>(blockSize, headSize);
-        convB = std::make_unique<HybridConvolver>(blockSize, headSize);
+        convA = std::make_unique<HybridConvolverMT>(blockSize, headSize);
+        convB = std::make_unique<HybridConvolverMT>(blockSize, headSize);
 
         B = blockSize;
 
@@ -94,8 +94,8 @@ public:
     }
 
 private:
-    std::unique_ptr<HybridConvolver> convA;
-    std::unique_ptr<HybridConvolver> convB;
+    std::unique_ptr<HybridConvolverMT> convA;
+    std::unique_ptr<HybridConvolverMT> convB;
 
     size_t B = 0;
 

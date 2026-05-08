@@ -22,8 +22,8 @@ class SpectrumViewer;
 
 class JackClient {
 public:
-    JackClient(IRMorpher* conv_, SpectrumViewer* sw_, FFTAnalyzer* ana_, Gain* vu_) : xrworker()
-{
+    JackClient(IRMorpher* conv_, SpectrumViewer* sw_, FFTAnalyzer* ana_, Gain* vu_)
+    : xrworker() {
         conv = conv_;
         sw = sw_;
         ana = ana_;

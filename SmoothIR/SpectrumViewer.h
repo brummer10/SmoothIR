@@ -123,6 +123,7 @@ public:
             fenable[i]->data = i;
             fenable[i]->parent_struct = this;
             fenable[i]->func.value_changed_callback = set_fenable;
+            adj_set_value(fenable[i]->adj, 1.0);
             double r,g,bcol;
             get_band_color(i, r, g, bcol);
 
@@ -267,7 +268,7 @@ public:
         run = true;
         int check = 0;
         while (run) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
             check += 1;
             XEvent xev;
             if (XCheckTypedWindowEvent(main.dpy, top->widget, ClientMessage, &xev)){
@@ -298,7 +299,8 @@ public:
     void quitGui() {
         run = false;
         cairo_surface_destroy(image_layer);
-        destroy_widget(top, top->app);
+        cairo_surface_destroy(eq_layer);
+        if (top) destroy_widget(top, top->app);
     }
 
 private:
@@ -340,6 +342,9 @@ private:
     int spec_height = 0;
     cairo_surface_t *image_layer = nullptr;
     bool rebuild_layer = true;
+    cairo_surface_t *eq_layer = nullptr;
+    bool rebuild_eq_layer = true;
+    bool rebuild = true;
     std::atomic<bool> set_leak {false};
 
     const float f_min = 20.0f;
@@ -351,10 +356,10 @@ private:
         if (set_leak.load(std::memory_order_acquire) &&
                 !ip->workerBusy.load(std::memory_order_acquire)) {
             set_leak.store(false, std::memory_order_release);
-            ip->computeIR(dstf, srcf, sampleRate, irLength, false);
+            rebuild = false;
+            ip->computeIR(dstf, srcf, sampleRate, irLength, rebuild);
         }
     }
-
 
     void check_spec() {
         adj_set_value(vumeter->adj, power2db(vumeter, vu->getMeter()));
@@ -376,7 +381,8 @@ private:
             setData(ip->getRefMag(), ip->getSrcMag(), 
                             ip->getDiffMag(), ip->getIRMag());
             conv->setIR(ip->createIR());
-            rebuild_layer = true;
+            rebuild_layer = rebuild;
+            rebuild_eq_layer = true;
             expose_widget(spec);
         }
     }
@@ -523,7 +529,8 @@ private:
     }
 
     void comput_and_set() {
-        ip->computeIR(dstf, srcf, sampleRate, irLength, true);
+        rebuild = true;
+        ip->computeIR(dstf, srcf, sampleRate, irLength, rebuild);
     }
 
     static void set_irsize(void *w_, void* user_data) {
@@ -899,12 +906,12 @@ private:
             if (dx*dx + dy*dy < 12*12) {
                 band_match = true;
                 match_band = i;
-                rebuild_layer = true;
+                rebuild_eq_layer = true;
                 expose_widget(spec);
                 return ;
             } else if (band_match) {
                 band_match = false;
-                rebuild_layer = true;
+                rebuild_eq_layer = true;
                 expose_widget(spec);
             }
         }
@@ -937,7 +944,7 @@ private:
                     startX = x;
                     lastX = x;
                     isStarted = true;
-                } else if (x > lastX + 0.8) {
+                } else if (x > lastX + 2.0) {
                     cairo_line_to(cr, x, y);
                 }
                 stopX = x;
@@ -1115,14 +1122,31 @@ private:
         cairo_set_source_surface (cr, w->image, 0, 0);
         cairo_rectangle(cr,0, 0, width, height);
         cairo_fill(cr);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
         drawSpectrum(cr, ref_,   width, height, sample_rate, 1.0, 0.333, 0.333,   "reference",   height-20);
         drawSpectrum(cr, source_,width, height, sample_rate, 0.314, 0.98, 0.482,  "source",      height-40);
         drawSpectrum(cr, diff_,  width, height, sample_rate, 1.0, 0.722, 0.424,   "diff",  height-60, true);
+        cairo_destroy(cr);
+        rebuild_layer = false;
+    }
+
+    void create_eq_layer(Widget_t *w, const int width, const int height, const float sample_rate) {
+        cairo_surface_destroy(eq_layer);
+        eq_layer = nullptr;
+        eq_layer = cairo_surface_create_similar (w->surface,
+                            CAIRO_CONTENT_COLOR_ALPHA, width, height);
+        cairo_t *cr = cairo_create (eq_layer);
+        cairo_set_source_surface (cr, image_layer, 0, 0);
+        cairo_rectangle(cr,0, 0, width, height);
+        cairo_fill(cr);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
         draw_band_points(cr, width, height);
         draw_band_curves(cr, width, height);
         drawSpectrum(cr, ir_,    width, height, sample_rate, 0.545, 0.914, 0.992, "impulse",      height-80);
         cairo_destroy(cr);
-        rebuild_layer = false;
+        rebuild_eq_layer = false;
     }
 
     void draw(void* w_) {
@@ -1141,19 +1165,24 @@ private:
         if (spec_height != height || spec_width != width) {
             create_background(w, width, height);
             create_layer(w, width, height, sample_rate);
+            create_eq_layer(w, width, height, sample_rate);
             spec_height = height;
             spec_width = width;
         }
         if (!image_layer || rebuild_layer) {
             create_layer(w, width, height, sample_rate);
         }
-        if (image_layer) {
-            cairo_set_source_surface (w->crb, image_layer, 0, 0);
+        if (!eq_layer || rebuild_eq_layer) {
+            create_eq_layer(w, width, height, sample_rate);
+        }
+        if (eq_layer) {
+            cairo_set_source_surface (w->crb, eq_layer, 0, 0);
             cairo_rectangle(w->crb,0, 0, width, height);
             cairo_fill(w->crb);
         } else {
             create_background(w, width, height);
             create_layer(w, width, height, sample_rate);
+            create_eq_layer(w, width, height, sample_rate);
             return;
         }
 
@@ -1181,8 +1210,6 @@ private:
         } else {
             cairo_set_dash(cr, dashes, 0, 0);
         }
-        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
 
         int bins = mags.size();
         int fft_size = bins * 2;
