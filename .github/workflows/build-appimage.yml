@@ -43,7 +43,7 @@ jobs:
         Type=Application
         Categories=AudioVideo;
         EOF
-        cp SmoothIR/smoothir.svg AppDir/smoothir.svg
+        cp SmoothIR/Resources/smoothir.svg AppDir/smoothir.svg
 
     - name: Download linuxdeploy
       run: |
