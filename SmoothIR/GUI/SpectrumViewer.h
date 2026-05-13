@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <atomic>
+#include <utility>
+
 #include "AudioFile.h"
 #include "xwidgets.h"
 #include "widgets.cc"
@@ -22,27 +24,34 @@
 class SpectrumViewer {
 public:
     using Vec = std::vector<float>;
-    std::vector<double> dstf;
-    std::vector<double> srcf;
+    std::vector<double> dstL;
+    std::vector<double> dstR;
+    std::vector<double> srcL;
+    std::vector<double> srcR;
     std::string ref_file;
     std::string src_file;
 
-    SpectrumViewer(IRProcessor *ip_, IRMorpher *conv_, FFTAnalyzer* ana_, Gain* vu_) {
+    SpectrumViewer(IRProcessor *ip_, IRMorpherStereo *conv_, FFTAnalyzer* ana_, GainStereo* vu_) {
         ip = ip_;
         conv = conv_;
         ana = ana_;
         vu = vu_;
     }
 
-    ~SpectrumViewer() {}
+    ~SpectrumViewer() {
+        if(image_layer) cairo_surface_destroy(image_layer);
+        if(eq_layer) cairo_surface_destroy(eq_layer);
+    }
 
-    void setRef(const std::vector<double>& ref, std::string ref_file_) {
-        dstf.assign(ref.begin(), ref.end());
+    void setRef(const std::vector<double>& refL, const std::vector<double>& refR, std::string ref_file_) {
+        dstL.assign(refL.begin(), refL.end());
+        dstR.assign(refR.begin(), refR.end());
         ref_file = ref_file_;
     }
 
-    void setSource(const std::vector<double>& source, std::string src_file_) {
-        srcf.assign(source.begin(), source.end());
+    void setSource(const std::vector<double>& sourceL, const std::vector<double>& sourceR, std::string src_file_) {
+        srcL.assign(sourceL.begin(), sourceL.end());
+        srcR.assign(sourceR.begin(), sourceR.end());
         src_file = src_file_;
     }
 
@@ -56,7 +65,7 @@ public:
         ir_.assign(ir.begin(), ir.end());
     }
 
-    void show(int width = 865, int height = 520) {
+    void show(int width = 875, int height = 520) {
         Xputty main;
         main_init(&main);
 
@@ -66,7 +75,7 @@ public:
         //top->flags = NO_PROPAGATE;
         top->func.expose_callback = draw_window;
 
-        spec = create_widget(&main, top,0, 0, width-65, height-190);
+        spec = create_widget(&main, top,0, 0, width-75, height-190);
         XSelectInput(spec->app->dpy, spec->widget,StructureNotifyMask|ExposureMask|KeyPressMask 
                     |EnterWindowMask|LeaveWindowMask|ButtonReleaseMask|KeyReleaseMask
                     |ButtonPressMask|Button1MotionMask|PointerMotionMask);
@@ -77,14 +86,15 @@ public:
         spec->func.button_release_callback = mouse_move_spec;
         spec->func.button_press_callback = mouse_set_spec;
 
-        Widget_t* gframe = add_my_frame(top,"", width-63, 0, 61, height-192);
-        vumeter = add_my_vmeter(gframe, "Meter", true, 28, 5, 10, height-200);
+        Widget_t* gframe = add_my_frame(top,"", width-73, 0, 71, height-192);
+        vumeterL = add_my_vmeter(gframe, "Meter", false, 28, 5, 10, height-200);
+        vumeterR = add_my_vmeter(gframe, "Meter", true, 38, 5, 10, height-200);
         Widget_t* vug = add_my_vslider(gframe, "Gain", 5, 5, 20, height-200);
         vug->parent_struct = this;
         set_adjustment(vug->adj,0.0, 0.0, -46.0, 12.0, 0.1, CL_CONTINUOS);
         vug->func.value_changed_callback = set_gain;
 
-        add_my_frame(top,"", width-65, 331, 63, 100);
+        add_my_frame(top,"", width-75, 331, 73, 100);
 
         int x = 1;
         for (int i = 0; i<6; i++) {
@@ -217,7 +227,7 @@ public:
         hcenable->parent_struct = this;
         hcenable->func.value_changed_callback = set_highcut_enable;
 
-        Widget_t* smooth = add_knob(top, "Smooth", 590,435,60, 80);
+        Widget_t* smooth = add_my_knob(top, "Smooth", "", 590,436,60, 80);
         set_adjustment(smooth->adj, 0.3, 0.3, 0.0, 1.0, 0.01, CL_CONTINUOS);
         smooth->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(smooth, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -225,7 +235,7 @@ public:
         smooth->func.value_changed_callback = set_smooth;
         smooth->func.button_release_callback = set;
 
-        Widget_t* dynamics = add_knob(top, "Dynamics", 660,435,60, 80);
+        Widget_t* dynamics = add_my_knob(top, "Dynamics", "", 660,436,60, 80);
         set_adjustment(dynamics->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
         dynamics->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(dynamics, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -233,7 +243,7 @@ public:
         dynamics->func.value_changed_callback = set_dynamics;
         dynamics->func.button_release_callback = set;
 
-        Widget_t* tilt = add_knob(top, "Tone Bias", 730,435,60, 80);
+        Widget_t* tilt = add_my_knob(top, "Tone Bias", "", 730,436,60, 80);
         set_adjustment(tilt->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
         tilt->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(tilt, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -241,7 +251,7 @@ public:
         tilt->func.value_changed_callback = set_tilt;
         tilt->func.button_release_callback = set;
 
-        Widget_t* irsize = add_my_combobox(top, "Ir size", 800, 435, 60, 20);
+        Widget_t* irsize = add_my_combobox(top, "Ir size", 805, 435, 60, 20);
         irsize->parent_struct = this;
         combobox_add_entry(irsize,"1024");
         combobox_add_entry(irsize,"2048");
@@ -252,12 +262,12 @@ public:
         irsize->func.value_changed_callback = set_irsize;
         add_tooltip(irsize->childlist->childs[0], "Ir length");
 
-        Widget_t* bp = add_my_toggle_button(top, 800, 465, 60, 20, "Bypass");
+        Widget_t* bp = add_my_toggle_button(top, 805, 465, 60, 20, "Bypass");
         bp->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         bp->parent_struct = this;
         bp->func.value_changed_callback = bp_response;
 
-        Widget_t* quit = add_my_button(top, 800, 495, 60, 20, "Quit");
+        Widget_t* quit = add_my_button(top, 805, 495, 60, 20, "Quit");
         quit->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         quit->parent_struct = this;
         quit->func.value_changed_callback = quit_response;
@@ -298,8 +308,6 @@ public:
 
     void quitGui() {
         run = false;
-        cairo_surface_destroy(image_layer);
-        cairo_surface_destroy(eq_layer);
         if (top) destroy_widget(top, top->app);
     }
 
@@ -317,11 +325,12 @@ private:
     Widget_t* fgain[6];
     Widget_t* solo[6];
     Widget_t* mute[6];
-    Widget_t* vumeter = nullptr;
+    Widget_t* vumeterL = nullptr;
+    Widget_t* vumeterR = nullptr;
     IRProcessor *ip = nullptr;
-    IRMorpher *conv = nullptr;
+    IRMorpherStereo *conv = nullptr;
     FFTAnalyzer* ana = nullptr;
-    Gain* vu = nullptr;
+    GainStereo* vu = nullptr;
     AudioFile af;
     Vec ref_;
     Vec source_;
@@ -357,12 +366,13 @@ private:
                 !ip->workerBusy.load(std::memory_order_acquire)) {
             set_leak.store(false, std::memory_order_release);
             rebuild = false;
-            ip->computeIR(dstf, srcf, sampleRate, irLength, rebuild);
+            ip->computeIR(dstL,dstR, srcL,srcR, sampleRate, irLength, rebuild);
         }
     }
 
     void check_spec() {
-        adj_set_value(vumeter->adj, power2db(vumeter, vu->getMeter()));
+        adj_set_value(vumeterL->adj, power2db(vumeterL, vu->getMeterL()));
+        adj_set_value(vumeterR->adj, power2db(vumeterR, vu->getMeterR()));
         if (ana->hasNewData()) {
             bin = ana->getBins();
             mag_.clear();
@@ -380,7 +390,7 @@ private:
             ip->workerReady.store(false, std::memory_order_release);
             setData(ip->getRefMag(), ip->getSrcMag(), 
                             ip->getDiffMag(), ip->getIRMag());
-            conv->setIR(ip->createIR());
+            conv->setIR(ip->createIRStereo());
             rebuild_layer = rebuild;
             rebuild_eq_layer = true;
             expose_widget(spec);
@@ -530,7 +540,7 @@ private:
 
     void comput_and_set() {
         rebuild = true;
-        ip->computeIR(dstf, srcf, sampleRate, irLength, rebuild);
+        ip->computeIR(dstL,dstR, srcL,srcR, sampleRate, irLength, rebuild);
     }
 
     static void set_irsize(void *w_, void* user_data) {
@@ -576,9 +586,11 @@ private:
             self->ref_label->label = self->ref_file.data();
             expose_widget(self->ref_label);
             if ( self->af.getAudioFile(self->ref_file.c_str(), self->sampleRate) ) {
-                self->dstf.clear();
+                self->dstL.clear();
+                self->dstR.clear();
                 for (uint32_t i = 0; i < self->af.samplesize; i++) {
-                    self->dstf.push_back((double)self->af.samples[i]);
+                    self->dstL.push_back((double)self->af.samplesL[i]);
+                    self->dstR.push_back((double)self->af.samplesR[i]);
                 }
                 self->comput_and_set();
             }
@@ -589,7 +601,8 @@ private:
         Widget_t *w = (Widget_t*)w_;
         if (w->flags & HAS_POINTER && !adj_get_value(w->adj)){
             auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-            self->dstf.clear();
+            self->dstL.clear();
+            self->dstR.clear();
             self->ref_label->label = " ";
             expose_widget(self->ref_label);
             self->comput_and_set();
@@ -604,9 +617,11 @@ private:
             self->src_label->label = self->src_file.data();
             expose_widget(self->src_label);
             if ( self->af.getAudioFile(self->src_file.c_str(), self->sampleRate) ) {
-                self->srcf.clear();
+                self->srcL.clear();
+                self->srcR.clear();
                 for (uint32_t i = 0; i < self->af.samplesize; i++) {
-                    self->srcf.push_back((double)self->af.samples[i]);
+                    self->srcL.push_back((double)self->af.samplesL[i]);
+                    self->srcR.push_back((double)self->af.samplesR[i]);
                 }
                 self->comput_and_set();
             }
@@ -617,7 +632,8 @@ private:
         Widget_t *w = (Widget_t*)w_;
         if (w->flags & HAS_POINTER && !adj_get_value(w->adj)){
             auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-            self->srcf.clear();
+            self->srcL.clear();
+            self->srcR.clear();
             self->src_label->label = " ";
             expose_widget(self->src_label);
             self->comput_and_set();
@@ -629,8 +645,8 @@ private:
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         if(user_data !=NULL) {
             self->ir_file = *(const char**)user_data;
-            std::vector<double> ir = self->ip->createIR();
-            self->af.saveAudioFile(self->ir_file, ir, ir.size(), self->sampleRate);
+            std::pair<std::vector<double>, std::vector<double> > ir = self->ip->createIRStereo();        
+            self->af.saveAudioFile(self->ir_file, ir.first, ir.second, self->sampleRate);
             std::cout << "save as: " << self->ir_file << std::endl;
         }
     }
@@ -1020,12 +1036,19 @@ private:
                                                     900, 3000, 4000, 6000, 7000, 8000, 9000};
         std::vector<double> dbs = {-72, -48, -24, -18, -12, -6, 0, 6, 12, 18, 24};
 
-        cairo_surface_destroy(w->image);
+        if (w->image) cairo_surface_destroy(w->image);
         w->image = nullptr;
         w->image = cairo_surface_create_similar (w->surface,
                             CAIRO_CONTENT_COLOR_ALPHA, width, height);
+        if (!w->image || cairo_surface_status(w->image) != CAIRO_STATUS_SUCCESS) {
+            w->image = nullptr;
+            return;
+        }
         cairo_t *cr = cairo_create (w->image);
-
+        if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+            cairo_destroy(cr);
+            return;
+        }
         cairo_set_source_rgb(cr, t.bg_r, t.bg_g, t.bg_b);
         cairo_rectangle(cr, 0, 0, width, height);
         cairo_fill(cr);
@@ -1114,11 +1137,19 @@ private:
     }
 
     void create_layer(Widget_t *w, const int width, const int height, const float sample_rate) {
-        cairo_surface_destroy(image_layer);
+        if(image_layer) cairo_surface_destroy(image_layer);
         image_layer = nullptr;
         image_layer = cairo_surface_create_similar (w->surface,
                             CAIRO_CONTENT_COLOR_ALPHA, width, height);
+        if (!image_layer || cairo_surface_status(image_layer) != CAIRO_STATUS_SUCCESS) {
+            image_layer = nullptr;
+            return;
+        }
         cairo_t *cr = cairo_create (image_layer);
+        if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+            cairo_destroy(cr);
+            return;
+        }
         cairo_set_source_surface (cr, w->image, 0, 0);
         cairo_rectangle(cr,0, 0, width, height);
         cairo_fill(cr);
@@ -1132,11 +1163,21 @@ private:
     }
 
     void create_eq_layer(Widget_t *w, const int width, const int height, const float sample_rate) {
-        cairo_surface_destroy(eq_layer);
-        eq_layer = nullptr;
-        eq_layer = cairo_surface_create_similar (w->surface,
-                            CAIRO_CONTENT_COLOR_ALPHA, width, height);
+        if (spec_height != height || spec_width != width) {
+            if(eq_layer) cairo_surface_destroy(eq_layer);
+            eq_layer = nullptr;
+            eq_layer = cairo_surface_create_similar (w->surface,
+                                CAIRO_CONTENT_COLOR_ALPHA, width, height);
+            if (!eq_layer || cairo_surface_status(eq_layer) != CAIRO_STATUS_SUCCESS) {
+                eq_layer = nullptr;
+                return;
+            }
+        }
         cairo_t *cr = cairo_create (eq_layer);
+        if (cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+            cairo_destroy(cr);
+            return;
+        }
         cairo_set_source_surface (cr, image_layer, 0, 0);
         cairo_rectangle(cr,0, 0, width, height);
         cairo_fill(cr);
@@ -1166,8 +1207,6 @@ private:
             create_background(w, width, height);
             create_layer(w, width, height, sample_rate);
             create_eq_layer(w, width, height, sample_rate);
-            spec_height = height;
-            spec_width = width;
         }
         if (!image_layer || rebuild_layer) {
             create_layer(w, width, height, sample_rate);
@@ -1185,6 +1224,8 @@ private:
             create_eq_layer(w, width, height, sample_rate);
             return;
         }
+        spec_height = height;
+        spec_width = width;
 
         drawSpectrum(cr, mag_, width, height, sample_rate, 0.45, 0.2, 0.75, "input", height-100, false, true);
 

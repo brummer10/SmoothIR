@@ -16,13 +16,14 @@
 #include <iostream>
 #include <string>
 #include <condition_variable>
+#include <utility>
 
 #include "CmdParser.h"
 #include "AudioFile.h"
 #include "FFTAnalyzer.h"
-#include "IrMatch.h"
-#include "IrMorpher.h"
-#include "Gain.h"
+#include "IRProcessorStereo.h"
+#include "IRMorpherStereo.h"
+#include "GainStereo.h"
 
 
 #include "SpectrumViewer.h"
@@ -36,13 +37,15 @@ int main(int argc, char *argv[]){
     AudioFile af;
     FFTAnalyzer ana;
     IRProcessor ip;
-    IRMorpher conv;
-    Gain vu;
+    IRMorpherStereo conv;
+    GainStereo vu;
     SpectrumViewer sw(&ip, &conv, &ana, &vu);
     JackClient jack(&conv, &sw, &ana, &vu);
 
-    std::vector<double> srcf;
-    std::vector<double> dstf;
+    std::vector<double> srcL;
+    std::vector<double> srcR;
+    std::vector<double> dstL;
+    std::vector<double> dstR;
     bool run = false;
 
     if (!cmd.parseCmdLine(argc, argv)) {
@@ -63,25 +66,27 @@ int main(int argc, char *argv[]){
     if(!src.empty()) {
         if (! af.getAudioFile(src.c_str(), sr) ) return 1;
         for (uint32_t i = 0; i < af.samplesize; i++) {
-            srcf.push_back((double)af.samples[i]);
+            srcL.push_back((double)af.samplesL[i]);
+            srcR.push_back((double)af.samplesR[i]);
         }
-        sw.setSource(srcf,src);
+        sw.setSource(srcL,srcR,src);
     }
     if(!dst.empty()) {
         if (! af.getAudioFile(dst.c_str(), sr) ) return 1;
         for (uint32_t i = 0; i < af.samplesize; i++) {
-            dstf.push_back((double)af.samples[i]);
+            dstL.push_back((double)af.samplesL[i]);
+            dstR.push_back((double)af.samplesR[i]);
         }
-        sw.setRef(dstf,dst);
+        sw.setRef(dstL,dstR,dst);
     }
 
-    ip.computeIR(dstf, srcf, sr, 4096, true);
+    ip.computeIR(dstL,dstR, srcL,srcR, sr, 4096, true);
 
     if(!ir_file.empty()) {
         while (!ip.workerReady) 
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
-        std::vector<double> ir = ip.createIR();
-        af.saveAudioFile(ir_file, ir, ir.size(), sr);
+        std::pair<std::vector<double>, std::vector<double> > ir = ip.createIRStereo();        
+        af.saveAudioFile(ir_file, ir.first, ir.second, sr);
         std::cout << "save as: " << ir_file << std::endl;
     } else if (run) {
         sw.show();

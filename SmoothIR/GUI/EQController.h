@@ -460,6 +460,7 @@ void draw_vmeter_scale(void *w_, void* user_data) {
     Widget_t *w = (Widget_t*)w_;
     Metrics_t metrics;
     os_get_window_metrics(w, &metrics);
+    if (!metrics.visible) return;
     int rect_width = metrics.width;
     int rect_height = metrics.height;
     double x0      = 0;
@@ -501,10 +502,18 @@ void draw_vmeter_scale(void *w_, void* user_data) {
 
 void create_vertical_meter_image(Widget_t *w, int width, int height) {
 
-    cairo_surface_destroy(w->image);
+    if (w->image) cairo_surface_destroy(w->image);
     w->image = NULL;
     w->image = cairo_surface_create_similar(w->surface, CAIRO_CONTENT_COLOR_ALPHA, width * 2, height);
+    if (!w->image || cairo_surface_status(w->image) != CAIRO_STATUS_SUCCESS) {
+        w->image = nullptr;
+        return;
+    }
     cairo_t *cri = cairo_create(w->image);
+    if (cairo_status(cri) != CAIRO_STATUS_SUCCESS) {
+        cairo_destroy(cri);
+        return;
+    }
 
     cairo_rectangle(cri, 0, 0, width, height);
     cairo_set_source_rgb(w->crb, 0.16,0.16,0.18);

@@ -4,7 +4,7 @@
  *
  * SPDX-License-Identifier:  BSD-3-Clause
  *
- * Copyright (C) 2025 brummer <brummer@web.de>
+ * Copyright (C) 2026 brummer <brummer@web.de>
  */
 
 
@@ -32,38 +32,49 @@ public:
     uint32_t channels;
     uint32_t samplesize;
     uint32_t samplerate;
-    double*   samples;
+    double*   samplesL;
+    double*   samplesR;
     double* saveBuffer;
     
     AudioFile() {
         channels   = 0;
         samplesize = 0;
         samplerate = 0;
-        samples    = nullptr;
+        samplesL    = nullptr;
+        samplesR    = nullptr;
         saveBuffer = nullptr;
     }
     
     ~AudioFile() {
-        delete[] samples;
+        delete[] samplesL;
+        delete[] samplesR;
         delete[] saveBuffer;
     }
 
-    inline bool convertToMono() {
-        delete[] samples;
-        samples = nullptr;
+    inline bool deinterleave() {
+        delete[] samplesL;
+        samplesL = nullptr;
+        delete[] samplesR;
+        samplesR = nullptr;
+        uint32_t buffersize = channels == 2 ? samplesize/2 : samplesize;
+        uint32_t c =  channels == 2 ? 1 : 0;
         try {
-            samples = new double[samplesize];
+            samplesL = new double[buffersize];
+            samplesR = new double[buffersize];
         } catch (...) {
             std::cerr << "Error: could not load file" << std::endl;
             return false;
         }
-        std::memset(samples, 0, samplesize * sizeof(double));
-        for (uint32_t i = 0; i < samplesize; i++) {
-            samples[i] = saveBuffer[i * channels] ;
+        std::memset(samplesL, 0, buffersize * sizeof(double));
+        std::memset(samplesR, 0, buffersize * sizeof(double));
+        for (uint32_t i = 0; i < buffersize; i++) {
+            samplesL[i] = saveBuffer[i * channels] ;
+            samplesR[i] = saveBuffer[i * channels + c] ;
         }
         delete[] saveBuffer;
         saveBuffer = nullptr;
-        channels = 1;
+        channels = 2;
+        samplesize = buffersize;
         return true;
     }
 
@@ -86,12 +97,14 @@ public:
         }
         if (info.channels > 2) {
             std::cerr << "Error: only two channels maximum are supported!" << std::endl;
+            sf_close(sndfile);
             return false;
         }
         try {
             saveBuffer = new double[info.frames * info.channels];
         } catch (...) {
             std::cerr << "Error: could not load file" << std::endl;
+            sf_close(sndfile);
             return false;
         }
         std::memset(saveBuffer, 0, info.frames * info.channels * sizeof(double));
@@ -100,24 +113,49 @@ public:
         channels = info.channels;
         samplerate = info.samplerate;
         sf_close(sndfile);
-        if (!convertToMono()) return false;
         if (expectedSampleRate)
-            samples = checkSampleRate(&samplesize, channels, samples, samplerate, expectedSampleRate);
-        return samples ? true : false;
+            saveBuffer = checkSampleRate(&samplesize, channels, saveBuffer, samplerate, expectedSampleRate);
+        return deinterleave();
     }
 
     // save a audio file from buffer to file
-    void saveAudioFile(std::string name, const std::vector<double> buffer, const uint32_t size, const uint32_t SampleRate) {
-        SF_INFO sfinfo ;
-        sfinfo.channels = 1;
-        sfinfo.samplerate = SampleRate;
-        sfinfo.format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
-        SNDFILE * sf = sf_open(name.c_str(), SFM_WRITE, &sfinfo);
-        if (!sf) {
-            std::cerr << "fail to open " << name << std::endl;
+    void saveAudioFile(const std::string& name,
+                       const std::vector<double>& bufferL,
+                       const std::vector<double>& bufferR,
+                       const uint32_t sampleRate) {
+
+        const bool stereo = !bufferR.empty();
+
+        const uint32_t frames = stereo ? std::min(bufferL.size(), bufferR.size()) : bufferL.size();
+
+        if (frames == 0) {
+            std::cerr << "Error: empty buffer\n";
             return;
         }
-        sf_writef_double(sf,buffer.data(), buffer.size());
+
+        SF_INFO sfinfo {};
+        sfinfo.channels   = stereo ? 2 : 1;
+        sfinfo.samplerate = sampleRate;
+        sfinfo.format     = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+
+        SNDFILE* sf = sf_open(name.c_str(), SFM_WRITE, &sfinfo);
+
+        if (!sf) {
+            std::cerr << "Error: failed to open " << name << std::endl;
+            return;
+        }
+
+        if (stereo) {
+            std::vector<double> interleaved(frames * 2);
+            for (uint32_t i = 0; i < frames; ++i) {
+                interleaved[i * 2]     = bufferL[i];
+                interleaved[i * 2 + 1] = bufferR[i];
+            }
+            sf_writef_double(sf, interleaved.data(), frames);
+        } else {
+            sf_writef_double(sf, bufferL.data(), frames);
+        }
+
         sf_write_sync(sf);
         sf_close(sf);
     }

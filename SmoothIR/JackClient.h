@@ -22,8 +22,8 @@ class SpectrumViewer;
 
 class JackClient {
 public:
-    JackClient(IRMorpher* conv_, SpectrumViewer* sw_, FFTAnalyzer* ana_, Gain* vu_)
-    : xrworker() {
+    JackClient(IRMorpherStereo* conv_, SpectrumViewer* sw_,
+                FFTAnalyzer* ana_, GainStereo* vu_) : xrworker() {
         conv = conv_;
         sw = sw_;
         ana = ana_;
@@ -51,8 +51,14 @@ public:
         in_port = jack_port_register(
             client, "in_0", JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
 
+        in_port1 = jack_port_register(
+            client, "in_1", JACK_DEFAULT_AUDIO_TYPE, JackPortIsInput, 0);
+
         out_port = jack_port_register(
             client, "out_0", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
+
+        out_port1 = jack_port_register(
+            client, "out_1", JACK_DEFAULT_AUDIO_TYPE, JackPortIsOutput, 0);
 
         jack_set_xrun_callback(client, xrunCallback, this);
         jack_set_sample_rate_callback(client, srateCallback, this);
@@ -89,6 +95,14 @@ public:
             in_port = nullptr;
         }
 
+        if (in_port1) {
+            if (jack_port_connected(in_port1)) {
+                jack_port_disconnect(client, in_port1);
+            }
+            jack_port_unregister(client, in_port1);
+            in_port1 = nullptr;
+        }
+
         if (out_port) {
             if (jack_port_connected(out_port)) {
                 jack_port_disconnect(client, out_port);
@@ -97,19 +111,29 @@ public:
             out_port = nullptr;
         }
 
+        if (out_port1) {
+            if (jack_port_connected(out_port1)) {
+                jack_port_disconnect(client, out_port1);
+            }
+            jack_port_unregister(client, out_port1);
+            out_port1 = nullptr;
+        }
+
         jack_client_close(client);
         client = nullptr;
     }
 
 private:
     ParallelThread     xrworker;
-    IRMorpher* conv = nullptr;
+    IRMorpherStereo* conv = nullptr;
     SpectrumViewer* sw = nullptr;
     FFTAnalyzer* ana = nullptr;
-    Gain* vu;
+    GainStereo* vu;
     jack_client_t* client = nullptr;
     jack_port_t* in_port = nullptr;
+    jack_port_t* in_port1 = nullptr;
     jack_port_t* out_port = nullptr;
+    jack_port_t* out_port1 = nullptr;
     bool runProcess = false;
     float *abuffer = nullptr;
     uint32_t frames = 0;
@@ -155,6 +179,18 @@ private:
         ana->processBlock(abuffer, frames);
     }
 
+    inline void feedAnanlyzer(uint32_t nframes, const float* inL, const float* inR) {
+
+        for (uint32_t i = 0; i < nframes; ++i) {
+            const float l = std::fabs(inL[i]);
+            const float r = std::fabs(inR[i]);
+            abuffer[i] = (l > r) ? inL[i] : inR[i];
+        }
+
+        frames = nframes;
+        xrworker.runProcess();
+    }
+
     static int processCallback(jack_nframes_t nframes, void* arg) {
         auto* self = static_cast<JackClient*>(arg);
         if (!self || !self->runProcess) return 0;
@@ -162,18 +198,25 @@ private:
         float* input = static_cast<float*>(
             jack_port_get_buffer(self->in_port, nframes));
 
+        float* input1 = static_cast<float*>(
+            jack_port_get_buffer(self->in_port1, nframes));
+
         float* output = static_cast<float*>(
             jack_port_get_buffer(self->out_port, nframes));
+
+        float* output1 = static_cast<float*>(
+            jack_port_get_buffer(self->out_port1, nframes));
 
         if (output != input)
             memcpy(output, input, nframes * sizeof(float));
 
-        self->conv->process(nframes, input, output);
-        self->vu->process(nframes, output, output);
+        if (output1 != input1)
+            memcpy(output1, input1, nframes * sizeof(float));
 
-        memcpy(self->abuffer, output, nframes * sizeof(float));
-        self->frames = nframes;
-        self->xrworker.runProcess();
+        self->conv->process(nframes, input, input1, output, output1);
+        self->vu->process(nframes, output, output1, output, output1);
+
+        self->feedAnanlyzer(nframes, output, output1);
 
         return 0;
     }

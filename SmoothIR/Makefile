@@ -81,7 +81,7 @@ endif
 	PIXMAPS_DIR ?= $(SHARE_DIR)/pixmaps
 	PKGCONFIG = pkg-config
 
-	INCLUDES := -I..
+	INCLUDES := -I.. -I./Convolver -I./Engine -I./FileIO -I./GUI -I./IRMatch
 	LIB_DIR := ../libxputty/libxputty/
 	HEADER_DIR := $(LIB_DIR)include/
 	UI_LIB:= $(LIB_DIR)libxputty.$(STATIC_LIB_EXT)
@@ -151,8 +151,8 @@ ifneq ("$(wildcard ../bin/$(NAME)$(EXE))","")
 	$(QUIET)cp ./$(BUILD_DIR)/$(NAME) $(DESTDIR)$(EXE_INSTALL_DIR)/$(NAME)
   ifeq ($(user),root)
 	$(QUIET)mkdir -p $(DESTDIR)$(DESKAPPS_DIR)
-	$(QUIET)cp $(NAME).desktop $(DESTDIR)$(DESKAPPS_DIR)/$(NAME).desktop
-	$(QUIET)cp $(NAME).svg $(DESTDIR)$(PIXMAPS_DIR)/$(NAME).svg
+	$(QUIET)cp ./Resources/$(NAME).desktop $(DESTDIR)$(DESKAPPS_DIR)/$(NAME).desktop
+	$(QUIET)cp ./Resources/$(NAME).svg $(DESTDIR)$(PIXMAPS_DIR)/$(NAME).svg
 	$(QUIET)update-desktop-database || true
   endif
 else
