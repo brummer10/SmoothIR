@@ -15,29 +15,16 @@
 #include <cstdio>
 #include <cstring>
 
-#include "ParallelThread.h"
-
-class IRMorpher;
-class SpectrumViewer;
+#include "Engine.h"
 
 class JackClient {
 public:
-    JackClient(IRMorpherStereo* conv_, SpectrumViewer* sw_,
-                FFTAnalyzer* ana_, GainStereo* vu_) : xrworker() {
-        conv = conv_;
+    JackClient(Engine* engine_, SpectrumViewer* sw_) {
+        engine = engine_;
         sw = sw_;
-        ana = ana_;
-        vu = vu_;
-        abuffer = new float[8192];
-        memset(abuffer, 0, 8192 * sizeof(float));
-        xrworker.start();
     }
 
-    ~JackClient() {
-        stop();
-        xrworker.stop();
-        delete[] abuffer;
-    }
+    ~JackClient() {}
 
     bool start(const char* name = "smoothir") {
         client = jack_client_open(name, JackNoStartServer, nullptr);
@@ -84,7 +71,6 @@ public:
 
     void stop() {
         runProcess = false;
-        ana->cleanup();
         if (!client) return;
 
         if (in_port) {
@@ -124,19 +110,15 @@ public:
     }
 
 private:
-    ParallelThread     xrworker;
-    IRMorpherStereo* conv = nullptr;
-    SpectrumViewer* sw = nullptr;
-    FFTAnalyzer* ana = nullptr;
-    GainStereo* vu;
-    jack_client_t* client = nullptr;
-    jack_port_t* in_port = nullptr;
-    jack_port_t* in_port1 = nullptr;
-    jack_port_t* out_port = nullptr;
-    jack_port_t* out_port1 = nullptr;
-    bool runProcess = false;
-    float *abuffer = nullptr;
-    uint32_t frames = 0;
+    Engine* engine          = nullptr;
+    SpectrumViewer* sw      = nullptr;
+    jack_client_t* client   = nullptr;
+    jack_port_t* in_port    = nullptr;
+    jack_port_t* in_port1   = nullptr;
+    jack_port_t* out_port   = nullptr;
+    jack_port_t* out_port1  = nullptr;
+    bool runProcess         = false;
+    uint32_t frames         = 0;
 
 private:
     // -------- Static Callbacks --------
@@ -161,34 +143,13 @@ private:
         if (prio < 0) prio = 25;
         fprintf(stderr, "Samplerate %u Hz\n", samplerate);
         self->sw->setSampleRate((int)samplerate);
-        self->ana->init(4096, (float)samplerate);
-        self->vu->init(samplerate);
-        self->xrworker.setThreadName("Worker");
-        self->xrworker.set<JackClient, &JackClient::analyse>(self);
-        self->xrworker.runProcess();
+        self->engine->init(samplerate, prio, 1);
         return 0;
     }
 
     static int bufferSizeCallback(jack_nframes_t nframes, void* arg) {
         fprintf(stderr, "Buffersize is %u samples\n", nframes);
         return 0;
-    }
-
-    void analyse() {
-        if (!frames) return;
-        ana->processBlock(abuffer, frames);
-    }
-
-    inline void feedAnanlyzer(uint32_t nframes, const float* inL, const float* inR) {
-
-        for (uint32_t i = 0; i < nframes; ++i) {
-            const float l = std::fabs(inL[i]);
-            const float r = std::fabs(inR[i]);
-            abuffer[i] = (l > r) ? inL[i] : inR[i];
-        }
-
-        frames = nframes;
-        xrworker.runProcess();
     }
 
     static int processCallback(jack_nframes_t nframes, void* arg) {
@@ -213,10 +174,7 @@ private:
         if (output1 != input1)
             memcpy(output1, input1, nframes * sizeof(float));
 
-        self->conv->process(nframes, input, input1, output, output1);
-        self->vu->process(nframes, output, output1, output, output1);
-
-        self->feedAnanlyzer(nframes, output, output1);
+        self->engine->process(nframes, input, input1, output, output1);
 
         return 0;
     }

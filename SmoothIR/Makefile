@@ -62,8 +62,14 @@ else
 endif
 
 	# set bundle name
-	NAME = smoothir
+	NAME = smootheq
+	PLUGNAME = smootheq
 	VER = 0.1
+
+ifeq (,$(filter clap,$(MAKECMDGOALS)))
+	NAME = smoothir
+	BACKEND = jack
+endif
 
 	PREFIX ?= /usr
 	# check if user is root
@@ -71,9 +77,11 @@ endif
 	ifeq ($(user),root)
 	INSTALL_DIR ?= $(PREFIX)/lib/lv2
 	EXE_INSTALL_DIR ?= $(PREFIX)/bin
+	CLAP_INSTAL_DIR ?= $(PREFIX)/lib/clap
 	else 
 	INSTALL_DIR ?= ~/.lv2
 	EXE_INSTALL_DIR ?= ~/bin
+	CLAP_INSTAL_DIR ?= ~/.clap
 	endif
 
 	SHARE_DIR ?= $(PREFIX)/share
@@ -87,18 +95,22 @@ endif
 	UI_LIB:= $(LIB_DIR)libxputty.$(STATIC_LIB_EXT)
 
 
+	CLAP_DIR := ./clap/
+	CLAP_INCLUDE := -I./clap/clap/ -I./clap/
+	CLAP_SOURCES := $(CLAP_DIR)SmoothIRClap.cpp
+
 	# set compile flags
 	GUI_LDFLAGS += -I$(HEADER_DIR) -Wl,-Bstatic -L. $(UI_LIB) \
 	-Wl,-Bdynamic `pkg-config --cflags --libs cairo x11` 
 
-	CFLAGS += -Wall -funroll-loops `$(PKGCONFIG) $(PKGCONFIG_FLAGS) --cflags sndfile fftw3 jack `\
+	CFLAGS += -Wall -funroll-loops `$(PKGCONFIG) $(PKGCONFIG_FLAGS) --cflags sndfile fftw3 $(BACKEND) `\
 	-ffast-math -fomit-frame-pointer -fstrength-reduce -fdata-sections \
 	-pthread $(SSE_CFLAGS)
 
 	CXXFLAGS += -MMD -std=c++17 -fno-math-errno -fno-trapping-math -fPIC -D_OS_UNIX_ -DALVER=\"$(VER)\" $(CFLAGS)
 
 	LDFLAGS += $(INCLUDES) -lm -pthread -lpthread -lstdc++ $(GUI_LDFLAGS) \
-	`$(PKGCONFIG) $(PKGCONFIG_FLAGS) --libs sndfile fftw3 fftw3f jack `
+	`$(PKGCONFIG) $(PKGCONFIG_FLAGS) --libs sndfile fftw3 fftw3f $(BACKEND) `
 	ifneq ($(MACOS)$(WINDOWS),true)
 		LDFLAGS += -lrt -lc
 	endif
@@ -111,7 +123,7 @@ endif
 	# invoke build files
 	OBJECTS = main.cpp
 
-	DEPS = smoothir.d
+	DEPS = $(NAME).d
 
 .PHONY : all 
 
@@ -122,6 +134,11 @@ all : check $(NAME)
 	@if ! [ -f ../bin/$(NAME)$(EXE) ]; then \
 		$(R_ECHO) "Sorry, build fail$(reset)"; \
 	fi
+
+clap: $(NAME).clap
+	$(QUIET)mkdir -p ../bin/
+	$(QUIET)cp ./$(NAME).clap ../bin/
+	@$(B_ECHO) "=================== DONE =======================$(reset)"
 
 debug : all
 
@@ -139,7 +156,7 @@ info:
 
 
 clean :
-	$(QUIET)rm -f *.o *.d *.a *.lib 
+	$(QUIET)rm -f *.o *.d *.a *.lib *.clap
 	$(QUIET)rm -f $(NAME) $(NAME).exe 
 	$(QUIET)rm -rf ../bin
 
@@ -158,6 +175,14 @@ ifneq ("$(wildcard ../bin/$(NAME)$(EXE))","")
 else
 	@$(B_ECHO) "$(NAME)$(EXE) Standalone skipped$(reset)"
 endif
+ifneq ("$(wildcard ../bin/$(PLUGNAME).clap)","")
+	@$(B_ECHO) "Install  $(PLUGNAME).clap to $(DESTDIR)$(CLAP_INSTAL_DIR)/$(reset)"
+	$(QUIET)mkdir -p $(DESTDIR)$(CLAP_INSTAL_DIR)/
+	$(QUIET)cp -r ../bin/$(PLUGNAME).clap $(DESTDIR)$(CLAP_INSTAL_DIR)/$(PLUGNAME).clap
+	@$(B_ECHO) ". ., done$(reset)"
+else
+	@$(B_ECHO) "$(NAME).clap Clap skipped$(reset)"
+endif
 
 uninstall :
 	$(QUIET)rm -rf $(DESTDIR)$(EXE_INSTALL_DIR)/$(NAME)
@@ -166,6 +191,13 @@ $(NAME) : $(OBJECTS)
 	$(CXX) -MMD $(CXXFLAGS) $(OBJECTS) -o $(NAME)$(EXE) $(LDFLAGS)
 ifneq ($(MAKECMDGOALS),debug)
 	$(STRIP) -s -x -X -R .note.ABI-tag $(NAME)$(EXE)
+endif
+
+$(NAME).clap: $(CLAP_SOURCES) $(CLAP_DIR)SmoothIR.cc
+	@$(B_ECHO) "Compiling $(NAME).clap $(reset)"
+	$(CXX) -shared $(CXXFLAGS) $(CLAP_INCLUDE) $(CLAP_SOURCES) -o $(NAME).clap  $(LDFLAGS)
+ifeq (,$(filter yes,$(DEBUG)))
+	$(STRIP) -s -x -X -R .comment -R .note.ABI-tag $(NAME).clap
 endif
 
 doc:

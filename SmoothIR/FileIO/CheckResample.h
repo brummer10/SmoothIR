@@ -15,56 +15,61 @@
 
 #include <cstdint>
 #include <cmath>
-#include <cstring>
+#include <vector>
 
 class CheckResample {
 public:
-    CheckResample() {}
+    CheckResample() = default;
 
-    double *checkSampleRate(uint32_t *count, uint32_t chan, double *input,
-                           uint32_t fs_in, uint32_t fs_out) {
-        if (fs_in == fs_out) return input;
+    std::vector<double> checkSampleRate(uint32_t fs_in, uint32_t fs_out,
+                        uint32_t chan, const std::vector<double>& input) {
+        if (fs_in == fs_out)
+            return input;
 
-        double ratio = double(fs_in) / double(fs_out);
-        uint32_t outFrames = (uint32_t)std::ceil(*count / ratio);
-        double *out = new double[outFrames * chan];
+        const uint32_t inFrames = input.size() / chan;
+
+        const double ratio = double(fs_in) / double(fs_out);
+        const uint32_t outFrames = static_cast<uint32_t>(std::ceil(inFrames / ratio));
+
+        std::vector<double> out(outFrames * chan);
 
         for (uint32_t ch = 0; ch < chan; ++ch) {
             double srcPos = 0.0;
 
             for (uint32_t i = 0; i < outFrames; ++i) {
-                uint32_t ip = (uint32_t)srcPos;
-                double t = srcPos - ip;
+                const uint32_t ip = static_cast<uint32_t>(srcPos);
+                const double t = srcPos - ip;
 
-                auto S = [&](int idx)->double {
-                    if (idx < 0) return input[ch];
-                    if ((uint32_t)idx >= *count)
-                        return input[(*count - 1) * chan + ch];
+                auto S = [&](int idx) -> double {
+                    if (idx < 0)
+                        return input[ch];
+
+                    if (static_cast<uint32_t>(idx) >= inFrames)
+                        return input[(inFrames - 1) * chan + ch];
+
                     return input[idx * chan + ch];
                 };
 
-                double x0 = S(ip - 1);
-                double x1 = S(ip);
-                double x2 = S(ip + 1);
-                double x3 = S(ip + 2);
+                const double x0 = S(ip - 1);
+                const double x1 = S(ip);
+                const double x2 = S(ip + 1);
+                const double x3 = S(ip + 2);
 
-                out[i * chan + ch] = hermite(x0,x1,x2,x3,t);
+                out[i * chan + ch] = hermite(x0, x1, x2, x3, t);
+
                 srcPos += ratio;
             }
         }
-
-        delete[] input;
-        *count = outFrames;
         return out;
     }
 
 private:
     static inline double hermite(double x0, double x1, double x2, double x3, double t) {
-        double c0 = x1;
-        double c1 = 0.5f * (x2 - x0);
-        double c2 = x0 - 2.5f * x1 + 2.0f * x2 - 0.5f * x3;
-        double c3 = 0.5f * (x3 - x0) + 1.5f * (x1 - x2);
-        return ((c3*t + c2)*t + c1)*t + c0;
+        const double c0 = x1;
+        const double c1 = 0.5 * (x2 - x0);
+        const double c2 = x0 - 2.5 * x1 + 2.0 * x2 - 0.5 * x3;
+        const double c3 = 0.5 * (x3 - x0) + 1.5 * (x1 - x2);
+
+        return ((c3 * t + c2) * t + c1) * t + c0;
     }
 };
-

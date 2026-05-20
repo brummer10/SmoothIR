@@ -21,6 +21,7 @@
 class IRMorpherStereo {
 public:
     using Vec  = std::vector<double>;
+    int bypass = 0;
 
     IRMorpherStereo(size_t blockSize = 256, size_t headSize  = 64) {
 
@@ -152,8 +153,6 @@ private:
     std::vector<float> bufferBR;
 
     std::atomic<bool> IrReady{false};
-
-    int bypass = 0;
 
     // preroll state
     const size_t FADE_SAMPLES = 32;

@@ -16,6 +16,7 @@
 #include <atomic>
 #include <utility>
 
+#include "Parameter.h"
 #include "AudioFile.h"
 #include "xwidgets.h"
 #include "widgets.cc"
@@ -24,18 +25,43 @@
 class SpectrumViewer {
 public:
     using Vec = std::vector<float>;
+    Params param;
     std::vector<double> dstL;
     std::vector<double> dstR;
     std::vector<double> srcL;
     std::vector<double> srcR;
     std::string ref_file;
     std::string src_file;
+    bool run = false;
+    Widget_t* top = nullptr;
+    Widget_t* bp = nullptr;
+    Widget_t* frame[6];
+    Widget_t* ftype[6];
+    Widget_t* fenable[6];
+    Widget_t* freq[6];
+    Widget_t* fq[6];
+    Widget_t* fgain[6];
+    Widget_t* solo[6];
+    Widget_t* mute[6];
 
-    SpectrumViewer(IRProcessor *ip_, IRMorpherStereo *conv_, FFTAnalyzer* ana_, GainStereo* vu_) {
-        ip = ip_;
-        conv = conv_;
-        ana = ana_;
-        vu = vu_;
+    Widget_t* lowcut = nullptr;
+    Widget_t* lcenable = nullptr;
+    Widget_t* highcut = nullptr;
+    Widget_t* hcenable = nullptr;
+
+    Widget_t* smooth = nullptr;
+    Widget_t* dynamics = nullptr;
+    Widget_t* tilt = nullptr;
+    Widget_t* vug = nullptr;
+    std::atomic<bool> havePreset {false};
+
+    SpectrumViewer(Engine *engine_) {
+        engine = engine_;
+        registerParameters();
+        engine->srcL = &srcL;
+        engine->srcR = &srcR;
+        engine->dstL = &dstL;
+        engine->dstR = &dstR;
     }
 
     ~SpectrumViewer() {
@@ -65,15 +91,18 @@ public:
         ir_.assign(ir.begin(), ir.end());
     }
 
-    void show(int width = 875, int height = 520) {
-        Xputty main;
+    void init(int width = 875, int height = 520) {
         main_init(&main);
-
         top = create_window(&main, os_get_root_window(&main, IS_WINDOW), 0, 0, width, height);
         widget_set_title(top, "Smoothed IR");
         widget_set_icon_from_png(top,LDVAR(smoothir_png));
         //top->flags = NO_PROPAGATE;
         top->func.expose_callback = draw_window;
+    }
+
+    void create(int width = 875, int height = 520) {
+        spec_width  = 0;
+        spec_height = 0;
 
         spec = create_widget(&main, top,0, 0, width-75, height-190);
         XSelectInput(spec->app->dpy, spec->widget,StructureNotifyMask|ExposureMask|KeyPressMask 
@@ -89,7 +118,7 @@ public:
         Widget_t* gframe = add_my_frame(top,"", width-73, 0, 71, height-192);
         vumeterL = add_my_vmeter(gframe, "Meter", false, 28, 5, 10, height-200);
         vumeterR = add_my_vmeter(gframe, "Meter", true, 38, 5, 10, height-200);
-        Widget_t* vug = add_my_vslider(gframe, "Gain", 5, 5, 20, height-200);
+        vug = add_my_vslider(gframe, "Gain", 5, 5, 20, height-200);
         vug->parent_struct = this;
         set_adjustment(vug->adj,0.0, 0.0, -46.0, 12.0, 0.1, CL_CONTINUOS);
         vug->func.value_changed_callback = set_gain;
@@ -133,7 +162,7 @@ public:
             fenable[i]->data = i;
             fenable[i]->parent_struct = this;
             fenable[i]->func.value_changed_callback = set_fenable;
-            adj_set_value(fenable[i]->adj, 1.0);
+            adj_set_value(fenable[i]->adj, engine->ip->bands[i].enabled);
             double r,g,bcol;
             get_band_color(i, r, g, bcol);
 
@@ -211,11 +240,11 @@ public:
         lowcut->func.value_changed_callback = set_lowcut;
         lowcut->func.button_release_callback = set;
 
-        Widget_t* lcenable = add_my_enable_button(lowcut, 19, 15, 20, 20, "");
+        lcenable = add_my_enable_button(lowcut, 19, 15, 20, 20, "");
         lcenable->parent_struct = this;
         lcenable->func.value_changed_callback = set_lowcut_enable;
 
-        Widget_t* highcut = add_my_knob(top, "HighCut", "Hz", 520,436,60, 80);
+        highcut = add_my_knob(top, "HighCut", "Hz", 520,436,60, 80);
         set_adjustment(highcut->adj, 4000.0, 4000.0, 110.0, 22000.0, 0.01, CL_LOGARITHMIC);
         highcut->flags = USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(highcut, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -223,11 +252,11 @@ public:
         highcut->func.value_changed_callback = set_highcut;
         highcut->func.button_release_callback = set;
 
-        Widget_t* hcenable = add_my_enable_button(highcut, 19, 15, 20, 20, "");
+        hcenable = add_my_enable_button(highcut, 19, 15, 20, 20, "");
         hcenable->parent_struct = this;
         hcenable->func.value_changed_callback = set_highcut_enable;
 
-        Widget_t* smooth = add_my_knob(top, "Smooth", "", 590,436,60, 80);
+        smooth = add_my_knob(top, "Smooth", "", 590,436,60, 80);
         set_adjustment(smooth->adj, 0.3, 0.3, 0.0, 1.0, 0.01, CL_CONTINUOS);
         smooth->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(smooth, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -235,7 +264,7 @@ public:
         smooth->func.value_changed_callback = set_smooth;
         smooth->func.button_release_callback = set;
 
-        Widget_t* dynamics = add_my_knob(top, "Dynamics", "", 660,436,60, 80);
+        dynamics = add_my_knob(top, "Dynamics", "", 660,436,60, 80);
         set_adjustment(dynamics->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
         dynamics->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(dynamics, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -243,7 +272,7 @@ public:
         dynamics->func.value_changed_callback = set_dynamics;
         dynamics->func.button_release_callback = set;
 
-        Widget_t* tilt = add_my_knob(top, "Tone Bias", "", 730,436,60, 80);
+        tilt = add_my_knob(top, "Tone Bias", "", 730,436,60, 80);
         set_adjustment(tilt->adj, 0.0, 0.0, -1.0, 1.0, 0.01, CL_CONTINUOS);
         tilt->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         set_widget_color(tilt, (Color_state)0, (Color_mod)0, 0.15, 0.52, 0.55, 1.0);
@@ -262,40 +291,21 @@ public:
         irsize->func.value_changed_callback = set_irsize;
         add_tooltip(irsize->childlist->childs[0], "Ir length");
 
-        Widget_t* bp = add_my_toggle_button(top, 805, 465, 60, 20, "Bypass");
+        bp = add_my_toggle_button(top, 805, 465, 60, 20, "Bypass");
         bp->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         bp->parent_struct = this;
         bp->func.value_changed_callback = bp_response;
 
+        #ifndef CLAPPLUG
         Widget_t* quit = add_my_button(top, 805, 495, 60, 20, "Quit");
         quit->flags |= USE_TRANSPARENCY | FAST_REDRAW;
         quit->parent_struct = this;
         quit->func.value_changed_callback = quit_response;
+        #endif
+    }
 
+    void show() {
         widget_show_all(top);
-
-        Atom WM_DELETE_WINDOW = os_register_wm_delete_window(top);
-        run = true;
-        int check = 0;
-        while (run) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));
-            check += 1;
-            XEvent xev;
-            if (XCheckTypedWindowEvent(main.dpy, top->widget, ClientMessage, &xev)){
-                if (xev.xclient.data.l[0] == (long int)WM_DELETE_WINDOW) {
-                    quitGui();
-                }
-            }
-            if (check > 6) {
-                check = 0;
-                check_leak();
-            }
-            check_spec();
-            os_run_embedded(&main);
-            check_irmatch();
-        }
-
-        main_quit(&main);
     }
 
     void setSampleRate(const double sr) {
@@ -311,26 +321,51 @@ public:
         if (top) destroy_widget(top, top->app);
     }
 
+    Xputty *getMain() {
+        return &main;
+    }
+
+    void check_spec() {
+        adj_set_value(vumeterL->adj, power2db(vumeterL, engine->vu->getMeterL()));
+        adj_set_value(vumeterR->adj, power2db(vumeterR, engine->vu->getMeterR()));
+        if (engine->ana->hasNewData()) {
+            bin = engine->ana->getBins();
+            mag_.clear();
+            const float* m = engine->ana->getMagnitudes();
+            for (int i = 0; i<bin; i++) {
+                mag_.push_back(m[i]);
+            }
+            engine->ana->clearFlag();
+            expose_widget(spec);
+        }
+    }
+
+    void check_irmatch() {
+        if (engine->dataReady.load(std::memory_order_acquire)) {
+            engine->dataReady.store(false, std::memory_order_release);
+            setData(engine->ip->getRefMag(), engine->ip->getSrcMag(), 
+                            engine->ip->getDiffMag(), engine->ip->getIRMag());
+            rebuild_layer = rebuild;
+            rebuild_eq_layer = true;
+            expose_widget(spec);
+        }
+    }
+
+    static void draw_window(void* w_, void* user_data) {
+        Widget_t* w = (Widget_t*)w_;
+        cairo_t* cr = w->crb;
+        cairo_set_source_rgb(cr, 0.157, 0.165, 0.212);
+        cairo_paint(cr);
+    }
+
 private:
-    Widget_t* top = nullptr;
+    Xputty main;
     Widget_t* ref_label = nullptr;
     Widget_t* src_label = nullptr;
     Widget_t* spec = nullptr;
-    Widget_t* lowcut = nullptr;
-    Widget_t* frame[6];
-    Widget_t* ftype[6];
-    Widget_t* fenable[6];
-    Widget_t* freq[6];
-    Widget_t* fq[6];
-    Widget_t* fgain[6];
-    Widget_t* solo[6];
-    Widget_t* mute[6];
     Widget_t* vumeterL = nullptr;
     Widget_t* vumeterR = nullptr;
-    IRProcessor *ip = nullptr;
-    IRMorpherStereo *conv = nullptr;
-    FFTAnalyzer* ana = nullptr;
-    GainStereo* vu = nullptr;
+    Engine *engine = nullptr;
     AudioFile af;
     Vec ref_;
     Vec source_;
@@ -340,7 +375,6 @@ private:
     std::string ir_file;
     size_t irLength = 2048;
     double sampleRate = 48000.0;
-    bool run = false;
     bool band_match = false;
     int match_state = -1;
     int match_band = -1;
@@ -361,39 +395,77 @@ private:
     const float db_min = -96.0f;
     const float db_max = 24.0f;
 
-    void check_leak() {
-        if (set_leak.load(std::memory_order_acquire) &&
-                !ip->workerBusy.load(std::memory_order_acquire)) {
-            set_leak.store(false, std::memory_order_release);
+    void registerParameters() {
+        //                  name           group    min, max, def, step     value                               isStepped  type
+        param.registerParam("Enable",     "Global",  0,   1,   0,    1,     (void*)&engine->conv->bypass,        true,  IS_INT);
+
+        param.registerParam("Band 1 enable",  "EQ",  0,   1,   1,    1,     (void*)&engine->ip->bands[0].enabled,true,  IS_INT);
+        param.registerParam("Band 1 type",    "EQ",  0,   2,   0,    1,     (void*)&engine->ip->bands[0].type,   true,  IS_INT);
+        param.registerParam("Band 1 mute",    "EQ",  0,   1,   0,    1,     (void*)&engine->ip->bands[0].mute,   true,  IS_INT);
+        param.registerParam("Band 1 freq",    "EQ", 20, 120,  80, 0.01,     (void*)&engine->ip->bands[0].freq,  false,  IS_DOUBLE);
+        param.registerParam("Band 1 gain",    "EQ", -48, 24,   0, 0.01,     (void*)&engine->ip->bands[0].gain,  false,  IS_DOUBLE);
+        param.registerParam("Band 1 Q",       "EQ", 0.4, 10, 0.7, 0.01,     (void*)&engine->ip->bands[0].Q,     false,  IS_DOUBLE);
+
+        param.registerParam("Band 2 enable",  "EQ",  0,   1,   1,    1,     (void*)&engine->ip->bands[1].enabled,true,  IS_INT);
+        param.registerParam("Band 2 type",    "EQ",  0,   2,   1,    1,     (void*)&engine->ip->bands[1].type,   true,  IS_INT);
+        param.registerParam("Band 2 mute",    "EQ",  0,   1,   0,    1,     (void*)&engine->ip->bands[1].mute,   true,  IS_INT);
+        param.registerParam("Band 2 freq",    "EQ", 80, 300, 150, 0.01,     (void*)&engine->ip->bands[1].freq,  false,  IS_DOUBLE);
+        param.registerParam("Band 2 gain",    "EQ", -48, 24, 0.0, 0.01,     (void*)&engine->ip->bands[1].gain,  false,  IS_DOUBLE);
+        param.registerParam("Band 2 Q",       "EQ", 0.5, 10, 1.0, 0.01,     (void*)&engine->ip->bands[1].Q,     false,  IS_DOUBLE);
+
+        param.registerParam("Band 3 enable",  "EQ",  0,   1,   1,    1,     (void*)&engine->ip->bands[2].enabled,true,  IS_INT);
+        param.registerParam("Band 3 type",    "EQ",  0,   2,   1,    1,     (void*)&engine->ip->bands[2].type,   true,  IS_INT);
+        param.registerParam("Band 3 mute",    "EQ",  0,   1,   0,    1,     (void*)&engine->ip->bands[2].mute,   true,  IS_INT);
+        param.registerParam("Band 3 freq",    "EQ",250,1000, 500, 0.01,     (void*)&engine->ip->bands[2].freq,  false,  IS_DOUBLE);
+        param.registerParam("Band 3 gain",    "EQ", -48, 24, 0.0, 0.01,     (void*)&engine->ip->bands[2].gain,  false,  IS_DOUBLE);
+        param.registerParam("Band 3 Q",       "EQ", 0.5, 10, 1.0, 0.01,     (void*)&engine->ip->bands[2].Q,     false,  IS_DOUBLE);
+
+        param.registerParam("Band 4 enable",  "EQ",  0,   1,   1,    1,     (void*)&engine->ip->bands[3].enabled,true,  IS_INT);
+        param.registerParam("Band 4 type",    "EQ",  0,   2,   1,    1,     (void*)&engine->ip->bands[3].type,   true,  IS_INT);
+        param.registerParam("Band 4 mute",    "EQ",  0,   1,   0,    1,     (void*)&engine->ip->bands[3].mute,   true,  IS_INT);
+        param.registerParam("Band 4 freq",    "EQ",800,3000,1500, 0.01,     (void*)&engine->ip->bands[3].freq,  false,  IS_DOUBLE);
+        param.registerParam("Band 4 gain",    "EQ", -48, 24, 0.0, 0.01,     (void*)&engine->ip->bands[3].gain,  false,  IS_DOUBLE);
+        param.registerParam("Band 4 Q",       "EQ", 0.7, 10, 1.2, 0.01,     (void*)&engine->ip->bands[3].Q,     false,  IS_DOUBLE);
+
+        param.registerParam("Band 5 enable",  "EQ",  0,   1,   1,    1,     (void*)&engine->ip->bands[4].enabled,true,  IS_INT);
+        param.registerParam("Band 5 type",    "EQ",  0,   2,   1,    1,     (void*)&engine->ip->bands[4].type,   true,  IS_INT);
+        param.registerParam("Band 5 mute",    "EQ",  0,   1,   0,    1,     (void*)&engine->ip->bands[4].mute,   true,  IS_INT);
+        param.registerParam("Band 5 freq",    "EQ",2000,8000,4500,0.01,     (void*)&engine->ip->bands[4].freq,  false,  IS_DOUBLE);
+        param.registerParam("Band 5 gain",    "EQ", -48, 24, 0.0, 0.01,     (void*)&engine->ip->bands[4].gain,  false,  IS_DOUBLE);
+        param.registerParam("Band 5 Q",       "EQ", 0.8, 10, 1.4, 0.01,     (void*)&engine->ip->bands[4].Q,     false,  IS_DOUBLE);
+ 
+        param.registerParam("Band 6 enable",  "EQ",  0,   1,   1,    1,     (void*)&engine->ip->bands[5].enabled,true,  IS_INT);
+        param.registerParam("Band 6 type",    "EQ",  0,   2,   2,    1,     (void*)&engine->ip->bands[5].type,   true,  IS_INT);
+        param.registerParam("Band 6 mute",    "EQ",  0,   1,   0,    1,     (void*)&engine->ip->bands[5].mute,   true,  IS_INT);
+        param.registerParam("Band 6 freq",    "EQ",6000,20000,10000,0.01,   (void*)&engine->ip->bands[5].freq,  false,  IS_DOUBLE);
+        param.registerParam("Band 6 gain",    "EQ", -48, 24, 0.0, 0.01,     (void*)&engine->ip->bands[5].gain,  false,  IS_DOUBLE);
+        param.registerParam("Band 6 Q",       "EQ", 0.4, 10, 0.7, 0.01,     (void*)&engine->ip->bands[5].Q,     false,  IS_DOUBLE);
+        //                  name           group    min, max, def, step     value                               isStepped  type
+        param.registerParam("Solo Band",      "EQ",  0,   5,   0,    1,     (void*)&engine->ip->solo_band,       true,  IS_INT);
+        param.registerParam("Solo enabled",   "EQ",  0,   1,   0,    1,     (void*)&engine->ip->solo_enabled,    true,  IS_INT);
+
+        param.registerParam("Lowcut enable",  "EQ",  0,   1,   0,    1,     (void*)&engine->ip->lowcut_enabled,  true,  IS_INT);
+        param.registerParam("Lowcut freq",    "EQ", 35, 2200, 100,0.01,     (void*)&engine->ip->lowcut,         false,  IS_DOUBLE);
+        param.registerParam("Highcut enable", "EQ",  0,   1,   0,    1,     (void*)&engine->ip->highcut_enabled, true,  IS_INT);
+        param.registerParam("Highcut freq",   "EQ", 110,22000,4000,0.01,    (void*)&engine->ip->highcut,        false,  IS_DOUBLE);
+
+        param.registerParam("Smooth",         "IR",  0,   1,  0.3, 0.01,    (void*)&engine->ip->smooth_amount,  false,  IS_DOUBLE);
+        param.registerParam("Dynamics",       "IR", -1,   1,  0.0, 0.01,    (void*)&engine->ip->dynamics_amount,false,  IS_DOUBLE);
+        param.registerParam("Tone Bias",      "IR", -1,   1,  0.0, 0.01,    (void*)&engine->ip->tilt_amount,    false,  IS_DOUBLE);
+       
+        param.registerParam("Volume Out", "Global",-46,  12,  0.0,  0.1,    (void*)&engine->vu->gain,           false,  IS_FLOAT);
+    }
+
+    // send value changes from GUI to the engine/host
+    void sendValueChanged(int index, float value) {
+        param.setParam(index, value);
+        param.setParamDirty(index, true);
+        param.controllerChanged.store(true, std::memory_order_release);
+        if (index > 0 && index < 46) {
+            engine->processIR.store(true, std::memory_order_release);
+            engine->rebuild.store(false, std::memory_order_release);
+            engine->workToDo.store(true, std::memory_order_release);
             rebuild = false;
-            ip->computeIR(dstL,dstR, srcL,srcR, sampleRate, irLength, rebuild);
-        }
-    }
-
-    void check_spec() {
-        adj_set_value(vumeterL->adj, power2db(vumeterL, vu->getMeterL()));
-        adj_set_value(vumeterR->adj, power2db(vumeterR, vu->getMeterR()));
-        if (ana->hasNewData()) {
-            bin = ana->getBins();
-            mag_.clear();
-            const float* m = ana->getMagnitudes();
-            for (int i = 0; i<bin; i++) {
-                mag_.push_back(m[i]);
-            }
-            ana->clearFlag();
-            expose_widget(spec);
-        }
-    }
-
-    void check_irmatch() {
-        if (ip->workerReady.load(std::memory_order_acquire)) {
-            ip->workerReady.store(false, std::memory_order_release);
-            setData(ip->getRefMag(), ip->getSrcMag(), 
-                            ip->getDiffMag(), ip->getIRMag());
-            conv->setIR(ip->createIRStereo());
-            rebuild_layer = rebuild;
-            rebuild_eq_layer = true;
-            expose_widget(spec);
         }
     }
 
@@ -410,13 +482,13 @@ private:
     static void set_gain(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->vu->setGain(adj_get_value(w->adj));
+        self->sendValueChanged(46, adj_get_value(w->adj));
     }
 
     static void bp_response(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->conv->setBypass((int)adj_get_value(w->adj));
+        self->sendValueChanged(0, adj_get_value(w->adj));
     }
 
     void set_radio(Widget_t* w, bool set) {
@@ -426,7 +498,7 @@ private:
                 xevfunc store = wid->func.value_changed_callback;
                 wid->func.value_changed_callback = null_callback;
                 adj_set_value(wid->adj, 0.0);
-                ip->setSoloBand(wid->data, (int)adj_get_value(wid->adj));
+                engine->ip->setSoloBand(wid->data, (int)adj_get_value(wid->adj));
                 wid->func.value_changed_callback = store;
             }
         }
@@ -439,7 +511,7 @@ private:
                     xevfunc store = wid->func.value_changed_callback;
                     wid->func.value_changed_callback = null_callback;
                     if (wid != w) adj_set_value(wid->adj, 0.0);
-                    ip->setMuteBand(wid->data, (int)adj_get_value(wid->adj));
+                    engine->ip->setMuteBand(wid->data, (int)adj_get_value(wid->adj));
                     wid->func.value_changed_callback = store;
                 }
             }
@@ -450,97 +522,94 @@ private:
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         self->set_radio(w, true);
-        self->ip->setSoloBand(w->data, (int)adj_get_value(w->adj));
-        self->set_leak.store(true, std::memory_order_release);
+        self->sendValueChanged(37, w->data);
+        self->sendValueChanged(38, adj_get_value(w->adj));
     }
 
     static void mute_response(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         self->set_radio(w, false);
-        self->ip->setMuteBand(w->data, (int)adj_get_value(w->adj));
-        self->set_leak.store(true, std::memory_order_release);
+        self->sendValueChanged(3 + (6 * w->data), adj_get_value(w->adj));
     }
 
     static void set_ftype(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setFtype(w->data, (int)adj_get_value(w->adj));
-        self->set_leak.store(true, std::memory_order_release);
+        self->sendValueChanged(2 + (6 * w->data), adj_get_value(w->adj));
     }
 
     static void set_freq(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setFreq(w->data, adj_get_value(w->adj));
+        self->sendValueChanged(4 + (6 * w->data), adj_get_value(w->adj));
     }
 
     static void set_fq(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setFq(w->data, adj_get_value(w->adj));
+        self->sendValueChanged(6 + (6 * w->data), adj_get_value(w->adj));
     }
 
     static void set_fgain(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setFgain(w->data, adj_get_value(w->adj));
+        self->sendValueChanged(5 + (6 * w->data), adj_get_value(w->adj));
     }
 
     static void set_fenable(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setFenable(w->data, (int)adj_get_value(w->adj));
-        self->set_leak.store(true, std::memory_order_release);
+        self->sendValueChanged(1 + (6 * w->data), adj_get_value(w->adj));
     }
 
     static void set_lowcut(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setLowCut((double)adj_get_value(w->adj));
+        self->sendValueChanged(40, adj_get_value(w->adj));
     }
 
     static void set_lowcut_enable(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setLowCutEnabled((int)adj_get_value(w->adj));
-        self->set_leak.store(true, std::memory_order_release);
+        self->sendValueChanged(39, adj_get_value(w->adj));
     }
 
     static void set_highcut(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setHighCut((double)adj_get_value(w->adj));
+        self->sendValueChanged(42, adj_get_value(w->adj));
     }
 
     static void set_highcut_enable(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setHighCutEnabled((int)adj_get_value(w->adj));
-        self->set_leak.store(true, std::memory_order_release);
+        self->sendValueChanged(41, adj_get_value(w->adj));
     }
 
     static void set_smooth(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setSmooth((double)adj_get_value(w->adj));
+        self->sendValueChanged(43, adj_get_value(w->adj));
     }
 
     static void set_dynamics(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setDynamics((double)adj_get_value(w->adj));
+        self->sendValueChanged(44, adj_get_value(w->adj));
     }
 
     static void set_tilt(void *w_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
-        self->ip->setTilt((double)adj_get_value(w->adj));
+        self->sendValueChanged(45, adj_get_value(w->adj));
     }
 
     void comput_and_set() {
         rebuild = true;
-        ip->computeIR(dstL,dstR, srcL,srcR, sampleRate, irLength, rebuild);
+        engine->processIR.store(true, std::memory_order_release);
+        engine->rebuild.store(true, std::memory_order_release);
+        engine->workToDo.store(true, std::memory_order_release);
     }
 
     static void set_irsize(void *w_, void* user_data) {
@@ -566,7 +635,7 @@ private:
         float lc = adj_get_value(self->lowcut->adj);
         float val = std::max<float>(lc, min_lc);
         set_adjustment(self->lowcut->adj, 100.0, val, min_lc, 2200.0, 0.01, CL_LOGARITHMIC);
-        self->ip->setLowCut((double)adj_get_value(self->lowcut->adj));
+        self->engine->ip->setLowCut((double)adj_get_value(self->lowcut->adj));
         expose_widget(self->lowcut);
         // recompute spectrum with new size
         self->comput_and_set();
@@ -583,16 +652,14 @@ private:
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         if(user_data !=NULL) {
             self->ref_file = *(const char**)user_data;
-            self->ref_label->label = self->ref_file.data();
-            expose_widget(self->ref_label);
-            if ( self->af.getAudioFile(self->ref_file.c_str(), self->sampleRate) ) {
+            if ( self->af.getAudioFile(self->ref_file, self->sampleRate) ) {
                 self->dstL.clear();
                 self->dstR.clear();
-                for (uint32_t i = 0; i < self->af.samplesize; i++) {
-                    self->dstL.push_back((double)self->af.samplesL[i]);
-                    self->dstR.push_back((double)self->af.samplesR[i]);
-                }
+                self->dstL.assign(self->af.samplesL.begin(), self->af.samplesL.end());
+                self->dstR.assign(self->af.samplesR.begin(), self->af.samplesR.end());
                 self->comput_and_set();
+                self->ref_label->label = self->ref_file.data();
+                expose_widget(self->ref_label);
             }
         }
     }
@@ -614,16 +681,14 @@ private:
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         if(user_data !=NULL) {
             self->src_file = *(const char**)user_data;
-            self->src_label->label = self->src_file.data();
-            expose_widget(self->src_label);
-            if ( self->af.getAudioFile(self->src_file.c_str(), self->sampleRate) ) {
+            if ( self->af.getAudioFile(self->src_file, self->sampleRate) ) {
                 self->srcL.clear();
                 self->srcR.clear();
-                for (uint32_t i = 0; i < self->af.samplesize; i++) {
-                    self->srcL.push_back((double)self->af.samplesL[i]);
-                    self->srcR.push_back((double)self->af.samplesR[i]);
-                }
+                self->srcL.assign(self->af.samplesL.begin(), self->af.samplesL.end());
+                self->srcR.assign(self->af.samplesR.begin(), self->af.samplesR.end());
                 self->comput_and_set();
+                self->src_label->label = self->src_file.data();
+                expose_widget(self->src_label);
             }
         }
     }
@@ -645,7 +710,7 @@ private:
         auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
         if(user_data !=NULL) {
             self->ir_file = *(const char**)user_data;
-            std::pair<std::vector<double>, std::vector<double> > ir = self->ip->createIRStereo();        
+            std::pair<std::vector<double>, std::vector<double> > ir = self->engine->ip->createIRStereo();        
             self->af.saveAudioFile(self->ir_file, ir.first, ir.second, self->sampleRate);
             std::cout << "save as: " << self->ir_file << std::endl;
         }
@@ -686,7 +751,6 @@ private:
                 self->my = y1;
                 if (std::abs(vg) < 0.2) vg = 0.0;
                 adj_set_value(self->fgain[self->match_band]->adj, vg);
-                self->set_leak.store(true, std::memory_order_release);
                 expose_widget(self->spec);
             }
         } else {
@@ -704,13 +768,11 @@ private:
                     float vq = adj_get_value(self->fq[self->match_band]->adj);
                     vq *= std::pow(2.0, 0.1);
                     adj_set_value(self->fq[self->match_band]->adj,vq);
-                    self->set_leak.store(true, std::memory_order_release);
                     expose_widget(self->spec);
                 } else if(xbutton->button == Button5) {
                     float vq = adj_get_value(self->fq[self->match_band]->adj);
                     vq *= std::pow(2.0, -0.1);
                     adj_set_value(self->fq[self->match_band]->adj,vq);
-                    self->set_leak.store(true, std::memory_order_release);
                     expose_widget(self->spec);
                 }
             }
@@ -784,13 +846,6 @@ private:
         double band_line_alpha = 0.95;
     };
     Theme t;
-
-    static void draw_window(void* w_, void* user_data) {
-        Widget_t* w = (Widget_t*)w_;
-        cairo_t* cr = w->crb;
-        cairo_set_source_rgb(cr, 0.157, 0.165, 0.212);
-        cairo_paint(cr);
-    }
 
     static void draw_callback(void* w_, void* user_data) {
         Widget_t* w = (Widget_t*)w_;
@@ -913,8 +968,8 @@ private:
         const int width  = m.width;
         const int height = m.height;
         for (int i = 0; i < 6; ++i) {
-            float x = freq_to_x(ip->bands[i].freq, f_min, f_max, width);
-            float y = db_to_y(ip->bands[i].gain, db_min, db_max, height);
+            float x = freq_to_x(engine->ip->bands[i].freq, f_min, f_max, width);
+            float y = db_to_y(engine->ip->bands[i].gain, db_min, db_max, height);
 
             float dx = mx - x;
             float dy = my - y;
@@ -939,7 +994,7 @@ private:
         float y0 = db_to_y(0.0, db_min, db_max, height);
 
         for (int i = 0; i < 6; ++i) {
-            auto& b = ip->bands[i];
+            auto& b = engine->ip->bands[i];
             if (!b.enabled) continue;
             bool isStarted = false;
             double startX = 0.0;
@@ -1008,9 +1063,9 @@ private:
             get_band_color(i, r, g, bcol);
             cairo_set_source_rgba(cr, r, g, bcol, 1.0);
 
-            int on = ip->bands[i].enabled;
-            float db = db_to_y(ip->bands[i].gain, db_min, db_max, height);
-            float freq = freq_to_x(ip->bands[i].freq, f_min, f_max, width);
+            int on = engine->ip->bands[i].enabled;
+            float db = db_to_y(engine->ip->bands[i].gain, db_min, db_max, height);
+            float freq = freq_to_x(engine->ip->bands[i].freq, f_min, f_max, width);
             if (on) {
                 cairo_move_to(cr, freq, db);
                 cairo_line_to(cr, freq, db);
@@ -1018,9 +1073,9 @@ private:
             }
         }
         for(int i = 0; i<6; i++) {
-            int on = ip->bands[i].enabled;
-            float db = db_to_y(ip->bands[i].gain, db_min, db_max, height);
-            float freq = freq_to_x(ip->bands[i].freq, f_min, f_max, width);
+            int on = engine->ip->bands[i].enabled;
+            float db = db_to_y(engine->ip->bands[i].gain, db_min, db_max, height);
+            float freq = freq_to_x(engine->ip->bands[i].freq, f_min, f_max, width);
             if (on) {
                 if (band_match && (match_band == i)) {
                     draw_band_ring(cr, freq, db, i, match_state);
@@ -1030,7 +1085,6 @@ private:
     }
 
     void create_background(Widget_t *w, const int width, const int height) {
-
         std::vector<double> freqs = {20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000};
         std::vector<double> minor_freqs = {30, 40, 60, 70, 80, 90, 300, 400, 600, 700, 800,
                                                     900, 3000, 4000, 6000, 7000, 8000, 9000};

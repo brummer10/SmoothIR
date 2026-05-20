@@ -14,6 +14,7 @@
 
 class GainStereo {
 public:
+    float gain = 0.0f;
 
     GainStereo() {}
     ~GainStereo() {}
@@ -105,7 +106,6 @@ private:
     double fRec2[2][2];
     int iRec1[2][2];
 
-    float gain = 0.0f;
     float meterL = -130.0f;
     float meterR = -130.0f;
 };

@@ -153,10 +153,41 @@ public:
             double smoothed = (a + b + c) / 3.0;
             mag[i] = 0.7 * smoothed + 0.3 * b;
         }
-        mag[0] = mag[1];
+        if (n > 1) mag[0] = mag[1];
+    }
+
+    static void smooth_low_end_hermite(Vec& mag, double sr) {
+        size_t n = mag.size();
+        size_t end = (size_t)((150.0 / (sr * 0.5)) * (n - 1));
+        end = std::min(end, n - 3);
+        Vec logMag = mag;
+        for (size_t i = 1; i < end - 1; ++i) {
+            double p0 = logMag[i - 1];
+            double p1 = logMag[i];
+            double p2 = logMag[i + 1];
+            double p3 = logMag[i + 2];
+            double m1 = 0.5 * (p2 - p0);
+            double m2 = 0.5 * (p3 - p1);
+            mag[i] = hermite(p1, p2, m1, m2, 0.5);
+        }
+        if (n > 1) mag[0] = mag[1];
     }
 
 private:
+
+    static double hermite(double p0, double p1,
+                          double m0, double m1,
+                          double t) {
+        double t2 = t * t;
+        double t3 = t2 * t;
+
+        double h00 =  2*t3 - 3*t2 + 1;
+        double h10 =      t3 - 2*t2 + t;
+        double h01 = -2*t3 + 3*t2;
+        double h11 =      t3 - t2;
+
+        return h00*p0 + h10*m0 + h01*p1 + h11*m1;
+    }
 
     static double getSmoothing(double freq) {
         double x = std::log10(freq + 1.0);

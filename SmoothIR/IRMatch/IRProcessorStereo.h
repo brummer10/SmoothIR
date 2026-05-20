@@ -32,6 +32,17 @@ public:
     std::atomic<bool> workerReady {false};
     std::atomic<bool> workerBusy {false};
 
+    int solo_band = 0;
+    int solo_enabled = 0;
+    int lowcut_enabled = 0;
+    int highcut_enabled = 0;
+
+    double lowcut = 100.0;
+    double highcut = 4000.0;
+    double smooth_amount = 0.3;
+    double dynamics_amount = 0.0;
+    double tilt_amount = 0.0;
+
     ~IRProcessor() {
         stopWorker();
     }
@@ -56,17 +67,17 @@ public:
 
     Band bands[6] = {
         // Low Shelf
-        {0, Band::LowShelf,  80.0,   0.0, 0.7, 0},
+        {1, Band::LowShelf,  80.0,   0.0, 0.7, 0},
         // Low-Mid
-        {0, Band::Peak,     150.0,   0.0, 1.0, 0},
+        {1, Band::Peak,     150.0,   0.0, 1.0, 0},
         // Mid 1
-        {0, Band::Peak,     500.0,   0.0, 1.0, 0},
+        {1, Band::Peak,     500.0,   0.0, 1.0, 0},
         // Mid 2
-        {0, Band::Peak,    1500.0,   0.0, 1.0, 0},
+        {1, Band::Peak,    1500.0,   0.0, 1.0, 0},
         // High-Mid
-        {0, Band::Peak,    4500.0,   0.0, 1.0, 0},
+        {1, Band::Peak,    4500.0,   0.0, 1.0, 0},
         // High Shelf
-        {0, Band::HighShelf, 10000.0, 0.0, 0.7, 0}
+        {1, Band::HighShelf, 10000.0, 0.0, 0.7, 0}
     };
 
     void computeIR(const Vec& refL, const Vec& refR,
@@ -99,6 +110,9 @@ public:
     }
 
     std::pair<Vec, Vec> createIRStereo() {
+        if (!mag_ir_L_.size()) make_flat(mag_ir_L_, analysisN / 2 + 1);
+        if (!mag_ir_R_.size()) make_flat(mag_ir_R_, analysisN / 2 + 1);
+       
         auto buildChannel = [this](const Vec& mag) {
             Vec synthMag = remap_mag_bins(mag, analysisN, synthesisN);
             CVec Hs = spectrum2fft(synthMag);
@@ -164,23 +178,14 @@ private:
     Vec gui_diff_;
     Vec gui_src_;
 
-    size_t analysisN = 0;
-    size_t synthesisN = 0;
+    size_t analysisN = 4096;
+    size_t synthesisN = 4096;
     static constexpr double EPS = 1e-12;
     size_t irLength = 4096;
     bool haveSource = false;
     bool haveReference = false;
     double peak = 0.0;
-    double lowcut = 100.0;
-    double highcut = 4000.0;
-    double smooth_amount = 0.3;
-    double dynamics_amount = 0.0;
-    double tilt_amount = 0.0;
     double sampleRate = 48000.0;
-    int lowcut_enabled = 0;
-    int highcut_enabled = 0;
-    int solo_band = 0;
-    int solo_enabled = 0;
 
     IRData bufferA;
     IRData bufferB;
@@ -264,9 +269,9 @@ private:
 
         if(lowcut_enabled_) {
             eq.apply_low_rolloff(mag_ir, sampleRate, lowcut_);
-        } else if (haveSource || haveReference) {
-            eq.apply_low_rolloff(mag_ir, sampleRate, 30.0);
-        }
+        }// else if (haveSource || haveReference) {
+         //   eq.apply_low_rolloff(mag_ir, sampleRate, 30.0);
+        //}
         if(highcut_enabled_) eq.apply_high_rolloff(mag_ir, sampleRate, highcut_);
 
         Band localBands[6];
@@ -318,7 +323,7 @@ private:
                 }
             }
         }
-        designer.reconstruct_low_end(mag_ir, sampleRate);
+        designer.smooth_low_end_hermite(mag_ir, sampleRate);
     }
 
     void processChannel(const Vec& reference, const Vec& source, IRChannelData& out, Vec& mag_ir, bool rebuild) {
@@ -341,7 +346,8 @@ private:
                 CVec H = fp.safe_divide(f1, f2);
                 out.diff = magnitude_db(H);
             } else if (haveReference) {
-                out.diff = magnitude_db(f1);
+                //out.diff = magnitude_db(f1);
+                make_flat(out.diff, analysisN / 2 + 1);
             } else if (haveSource) {
                 out.diff = magnitude_db(f2);
             } else {
@@ -370,7 +376,8 @@ private:
                 for (auto& v : out.src)  v -= out.peak;
                 //double peak_d = *std::max_element(out.diff.begin(), out.diff.end());
                 //peak_d = peak_d < out.peak ? out.peak : peak_d;
-                for (auto& v : out.diff) v -= out.peak;
+                if (haveSource)
+                    for (auto& v : out.diff) v -= out.peak;
             }
         }
 
