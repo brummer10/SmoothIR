@@ -460,7 +460,7 @@ static const clap_plugin_descriptor_t smoothir_descriptor = {
     .url = "https://github.com/brummer10/SmoothIR",
     .manual_url = "https://github.com/brummer10/SmoothIR",
     .support_url = "https://github.com/brummer10/SmoothIR",
-    .version = "0.1.0",
+    .version = "0.3.0",
     .description = "CLAP plugin wrapper for SmoothIR",
     .features = (const char *[]){ CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, NULL },
 };

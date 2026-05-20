@@ -7,6 +7,8 @@
 **SmoothIR** is a tool for creating impulse responses (IRs) through spectral matching of two audio files  
 – with a focus on **musically useful results**, stability, and predictable behavior.
 
+**SmoothEQ** is a Linear Phase EQ based on Impulse Response Processing as Clap plugin.
+
 The idea is simple:
 
 > The spectral difference between a *Reference* and a *Source* is transformed into an IR  
@@ -158,7 +160,7 @@ Internally:
 SmoothIR behaves robustly depending on available inputs:
 
 * **Reference + Source** → full spectral matching  
-* **Reference only** → spectral capture  
+* **Reference only** →  visualize the Reference spectrum
 * **Source only** → spectrum capture  
 
 Missing inputs do **not** produce undefined behavior.
@@ -245,6 +247,11 @@ SmoothIR relies on a small set of widely available libraries:
     git submodule update
     make
     sudo make install
+
+## Build as Clap plugin
+
+    make clap
+    make install
 
 ---
 
