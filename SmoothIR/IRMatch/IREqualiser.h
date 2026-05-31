@@ -19,7 +19,7 @@ class IREqualiser {
 public:
     using Vec  = std::vector<double>;
 
-    Vec buildBandSoloIR(const Band& b, const Vec mag_, double sr) {
+    Vec buildBandSoloIR(const Band& b, const Vec mag_, double sr, bool haveSource) {
         size_t n = mag_.size();
         Vec mag(n, -220.0);
 
@@ -50,7 +50,7 @@ public:
                     } else {
                         mask = 0.0;
                     }
-                    db += 12.0;
+                   // if (haveSource) db += 12.0;
                     break;
                 }
                 case Band::LowShelf:
@@ -59,7 +59,7 @@ public:
                     if (x < -edgeWidth) mask = 1.0;
                     else if (x < edgeWidth) mask = 1.0 - edge_fade(x, edgeWidth);
                     else mask = 0.0;
-                    db += 12.0;
+                   // if (haveSource) db += 12.0;
                     break;
                 }
                 case Band::HighShelf:
@@ -68,7 +68,7 @@ public:
                     if (x > edgeWidth) mask = 1.0;
                     else if (x > -edgeWidth) mask = edge_fade(x, edgeWidth);
                     else mask = 0.0;
-                    db += 12.0;
+                   // if (haveSource) db += 12.0;
                     break;
                 }
             }

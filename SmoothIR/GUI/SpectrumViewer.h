@@ -112,6 +112,7 @@ public:
         spec->parent_struct = this;
         spec->func.expose_callback = draw_callback;
         spec->func.motion_callback = mouse_in_spec;
+        spec->func.leave_callback = mouse_leave_spec;
         spec->func.button_release_callback = mouse_move_spec;
         spec->func.button_press_callback = mouse_set_spec;
 
@@ -123,7 +124,9 @@ public:
         set_adjustment(vug->adj,0.0, 0.0, -46.0, 12.0, 0.1, CL_CONTINUOS);
         vug->func.value_changed_callback = set_gain;
 
-        add_my_frame(top,"", width-75, 331, 73, 100);
+        Widget_t* lframe = add_my_frame(top,"", width-75, 331, 73, 100);
+        curFreq = add_my_label(lframe, "",5,10,60,20);
+        curGain = add_my_label(lframe, "",5,30,60,20);
 
         int x = 1;
         for (int i = 0; i<6; i++) {
@@ -365,6 +368,8 @@ private:
     Widget_t* spec = nullptr;
     Widget_t* vumeterL = nullptr;
     Widget_t* vumeterR = nullptr;
+    Widget_t* curFreq = nullptr;
+    Widget_t* curGain = nullptr;
     Engine *engine = nullptr;
     AudioFile af;
     Vec ref_;
@@ -373,6 +378,8 @@ private:
     Vec ir_;
     Vec mag_;
     std::string ir_file;
+    char cfreq[64];
+    char cgain[64];
     size_t irLength = 2048;
     double sampleRate = 48000.0;
     bool band_match = false;
@@ -728,6 +735,46 @@ private:
         }
     }
 
+    void infoString(float x, float y) {
+        Metrics_t m;
+        os_get_window_metrics(spec, &m);
+        const int width  = m.width;
+        const int height = m.height;
+
+        float freq = x_to_freq(x, f_min, f_max, width);
+        float g = y_to_db(y, db_min, db_max, height);
+        if (freq >= 10000.0f)
+            snprintf(cfreq, 63, "%.1f kHz", freq / 1000.0);
+        else if (freq >= 1000.0f)
+            snprintf(cfreq, 63, "%.2f kHz", freq / 1000.0);
+        else if (freq >= 100.0f)
+            snprintf(cfreq, 63, "%.1f Hz", freq );
+        else
+            snprintf(cfreq, 63, " %.1f Hz", freq);
+
+        if (g > 10.0f) 
+            snprintf(cgain, 63, " %.1f dB", g);
+        else if (g > -0.001f) 
+            snprintf(cgain, 63, "  %.1f dB", g);
+        else if (g > -10.0f) 
+            snprintf(cgain, 63, " %.1f dB", g);
+        else
+            snprintf(cgain, 63, "%.1f dB", g);
+        curFreq->label = cfreq;
+        curGain->label = cgain;
+        expose_widget(curFreq);
+        expose_widget(curGain);
+    }
+
+    static void mouse_leave_spec(void *w_, void* user_data) {
+        Widget_t *w = (Widget_t*)w_;
+        auto* self = static_cast<SpectrumViewer*>(w->parent_struct);
+        self->curFreq->label = "";
+        self->curGain->label = "";
+        expose_widget(self->curFreq);
+        expose_widget(self->curGain);
+    }
+
     static void mouse_in_spec(void *w_, void *xmotion_, void* user_data) {
         Widget_t *w = (Widget_t*)w_;
         XMotionEvent *xmotion = (XMotionEvent*)xmotion_;
@@ -735,6 +782,7 @@ private:
         int x1 = xmotion->x;
         int y1 = xmotion->y;
         self->match_state = 0;
+        self->infoString(x1, y1);
         //std::cout << "x " << x1 << " y " << y1 << std::endl;
         if(xmotion->state & Button1Mask) {
             self->match_state = 1;
@@ -891,6 +939,12 @@ private:
         // back to linear
         double q = std::exp(shaped * 1.5);
         return q;
+    }
+
+    static float y_to_db(float y, float db_min, float db_max, int height) {
+        float norm = 1.0f - (y / height);
+        norm = clampf(norm, 0.0f, 1.0f);
+        return db_min + norm * (db_max - db_min);
     }
 
     static inline double x_to_freq(double x, double f_min, double f_max, int width) {
@@ -1209,9 +1263,9 @@ private:
         cairo_fill(cr);
         cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
         cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-        drawSpectrum(cr, ref_,   width, height, sample_rate, 1.0, 0.333, 0.333,   "reference",   height-20);
-        drawSpectrum(cr, source_,width, height, sample_rate, 0.314, 0.98, 0.482,  "source",      height-40);
-        drawSpectrum(cr, diff_,  width, height, sample_rate, 1.0, 0.722, 0.424,   "diff",  height-60, true);
+        drawSpectrum(cr, ref_,   width, height, 1.5, sample_rate, 1.0, 0.333, 0.333,   "reference",   height-20);
+        drawSpectrum(cr, source_,width, height, 1.5, sample_rate, 0.314, 0.98, 0.482,  "source",      height-40);
+        drawSpectrum(cr, diff_,  width, height, 1.5, sample_rate, 1.0, 0.722, 0.424,   "diff",  height-60, true);
         cairo_destroy(cr);
         rebuild_layer = false;
     }
@@ -1239,7 +1293,7 @@ private:
         cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
         draw_band_points(cr, width, height);
         draw_band_curves(cr, width, height);
-        drawSpectrum(cr, ir_,    width, height, sample_rate, 0.545, 0.914, 0.992, "impulse",      height-80);
+        drawSpectrum(cr, ir_,    width, height, 2.5, sample_rate, 0.545, 0.914, 0.992, "impulse",      height-80);
         cairo_destroy(cr);
         rebuild_eq_layer = false;
     }
@@ -1281,14 +1335,14 @@ private:
         spec_height = height;
         spec_width = width;
 
-        drawSpectrum(cr, mag_, width, height, sample_rate, 0.45, 0.2, 0.75, "input", height-100, false, true);
+        drawSpectrum(cr, mag_, width, height, 1.5, sample_rate, 0.45, 0.2, 0.75, "input", height-100, false, true);
 
         cairo_select_font_face(cr, "Sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
         cairo_set_font_size(cr, 11);
 
     }
 
-    void drawSpectrum(cairo_t* cr, const Vec& mags, int width, int height,
+    void drawSpectrum(cairo_t* cr, const Vec& mags, int width, int height, double line_width,
                       float sample_rate, float r, float g, float b, const char* label,
                       float label_y, bool dash = false, bool fill = false) {
 
@@ -1297,7 +1351,7 @@ private:
         cairo_set_source_rgba(cr, r, g, b, t.spec_alpha);
         draw_text(cr, width - 60, label_y, label);
 
-        cairo_set_line_width(cr, 1.5);
+        cairo_set_line_width(cr, line_width);
         static const double dashes[] = {2.0};
         if (dash) {
             cairo_set_dash(cr, dashes, 1, 0);

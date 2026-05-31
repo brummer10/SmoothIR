@@ -711,6 +711,135 @@ Widget_t* add_my_vslider(Widget_t *parent, const char * label,
     return wid;
 }
 
+
+void draw_my_valuedisplay(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    if (!w) return;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    int width = metrics.width-2;
+    int height = metrics.height-2;
+    if (!metrics.visible) return;
+
+    cairo_rectangle(w->crb,2.0, 2.0, width, height);
+
+    if(w->state==0) {
+        cairo_set_line_width(w->crb, 1.0);
+        use_shadow_color_scheme(w, NORMAL_);
+        cairo_fill_preserve(w->crb);
+        use_frame_color_scheme(w, NORMAL_);
+    } else if(w->state==1) {
+        use_shadow_color_scheme(w, PRELIGHT_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.5);
+        use_frame_color_scheme(w, NORMAL_);
+    } else if(w->state==2) {
+        use_shadow_color_scheme(w, SELECTED_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.0);
+        use_frame_color_scheme(w, SELECTED_);
+    } else if(w->state==3) {
+        use_shadow_color_scheme(w, ACTIVE_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.0);
+        use_frame_color_scheme(w, ACTIVE_);
+    } else if(w->state==4) {
+        use_shadow_color_scheme(w, INSENSITIVE_);
+        cairo_fill_preserve(w->crb);
+        cairo_set_line_width(w->crb, 1.0);
+        use_frame_color_scheme(w, INSENSITIVE_);
+    }
+    cairo_stroke(w->crb); 
+
+    cairo_rectangle(w->crb,4.0, 4.0, width, height);
+    cairo_stroke(w->crb);
+    cairo_rectangle(w->crb,3.0, 3.0, width, height);
+    cairo_stroke(w->crb);
+
+    cairo_text_extents_t extents;
+
+    char s[64];
+    float value = adj_get_value(w->adj);
+    if (value > 10000.0f) {
+        snprintf(s, 63,"%.1f k%s", value / 1000.0, w->input_label);
+    } else if (value >= 1000.0f) {
+        snprintf(s, 63, "%.2f k%s", value / 1000.0, w->input_label);
+    } else  if (value >= 100.0f) {
+        snprintf(s, 63, "%.1f %s", value, w->input_label);
+    } else {
+        snprintf(s, 63, "%.2f %s", value, w->input_label);
+    }
+    //if(strlen(w->label)) memcpy(s + strlen(s), w->label, strlen(w->label) + 1);
+    
+    use_text_color_scheme(w, get_color_state(w));
+    float font_size = w->app->normal_font/w->scale.ascale;
+    cairo_set_font_size (w->crb, font_size);
+    cairo_text_extents(w->crb,s , &extents);
+    cairo_move_to (w->crb, (width-extents.width)*0.5, (height+extents.height)*0.55);
+    cairo_show_text(w->crb, s);
+    cairo_new_path (w->crb);
+
+}
+/*
+void draw_my_valuedisplay(void *w_, void* user_data) {
+    Widget_t *w = (Widget_t*)w_;
+    if (!w) return;
+    Metrics_t metrics;
+    os_get_window_metrics(w, &metrics);
+    //int width = metrics.width-5;
+    //int height = metrics.height-5;
+    if (!metrics.visible) return;
+    float offset = 0.0;
+    if(w->state==1 && ! (int)w->adj_y->value) {
+        offset = 2.0;
+    } else if(w->state==1) {
+        offset = 3.0;
+    } else if(w->state==2) {
+        offset = 3.0;
+    } else if(w->state==3) {
+        offset = 2.0;
+    }
+
+    char s[64];
+    float value = adj_get_value(w->adj);
+    if (value > 10000.0f) {
+        snprintf(s, 63,"%.1f k%s", value / 1000.0, w->input_label);
+    } else if (value >= 1000.0f) {
+        snprintf(s, 63, "%.2f k%s", value / 1000.0, w->input_label);
+    } else  if (value >= 100.0f) {
+        snprintf(s, 63, "%.1f %s", value, w->input_label);
+    } else {
+        snprintf(s, 63, "%.2f %s", value, w->input_label);
+    }
+    use_text_color_scheme(w, get_color_state(w));
+
+    widget_set_scale(w);
+    cairo_text_extents_t extents_f;
+    cairo_set_font_size (w->crb, w->app->normal_font + 1 + offset);
+    cairo_text_extents(w->crb, s, &extents_f);
+    double twf = extents_f.width/2.0;
+    cairo_move_to (w->crb, max(5 * w->app->hdpi,(w->scale.init_width*0.5)-twf), (w->scale.init_height - extents_f.height*0.5)  * w->app->hdpi );
+    cairo_show_text(w->crb, s);
+    widget_reset_scale(w);
+    
+}
+*/
+Widget_t* add_my_valuedisplay(Widget_t *parent, const char * label,
+                const char * type, int x, int y, int width, int height) {
+
+    Widget_t *wid = create_widget(parent->app, parent, x, y, width, height);
+    wid->label = label;
+    snprintf(wid->input_label, 31, "%s", type);
+    wid->adj_y = add_adjustment(wid,0.0, 0.0, 0.0, 1.0, 0.01, CL_CONTINUOS);
+    wid->adj = wid->adj_y;
+    wid->scale.gravity = CENTER;
+    wid->func.enter_callback = os_transparent_draw;
+    wid->func.leave_callback = os_transparent_draw;
+    wid->func.expose_callback = draw_my_valuedisplay;
+    return wid;
+}
+
+
 #ifdef __cplusplus
 }
 #endif

@@ -87,6 +87,7 @@ public:
 
         sampleRate = sampleRate_;
         irLength = irLength_;
+        haveFreshSource = rebuild;
 
         haveReference = !refL.empty() || !refR.empty();
         haveSource = !srcL.empty() || !srcR.empty();
@@ -126,7 +127,7 @@ public:
             for (size_t i = 0; i < irLength; ++i)
                 ir[i] = ir_full[i].real();
 
-            normalize(ir);
+            //if (haveFreshSource) normalize(ir);
             return ir;
         };
 
@@ -183,6 +184,7 @@ private:
     static constexpr double EPS = 1e-12;
     size_t irLength = 4096;
     bool haveSource = false;
+    bool haveFreshSource = false;
     bool haveReference = false;
     double peak = 0.0;
     double sampleRate = 48000.0;
@@ -304,13 +306,13 @@ private:
         //mag_ir = designer.soften_peaks(mag_ir, 0.2);
 
         if (!haveSource && ! haveReference) {
-            peak = std::max(peak, *std::max_element(mag_ir.begin(), mag_ir.end()));
-            for (auto& v : mag_ir) v -= peak;
+           // peak = std::max(peak, *std::max_element(mag_ir.begin(), mag_ir.end()));
+           // for (auto& v : mag_ir) v -= peak;
         }
 
         if (solo_enabled_) {
             if (localBands[solo_band_].enabled) {
-                mag_ir = eq.buildBandSoloIR(localBands[solo_band_], mag_ir, sampleRate);
+                mag_ir = eq.buildBandSoloIR(localBands[solo_band_], mag_ir, sampleRate, haveSource);
                 mag_ir = designer.harmonic_refine(mag_ir, sampleRate);
             }
         } else {
@@ -374,9 +376,11 @@ private:
 
                 for (auto& v : out.ref)  v -= out.peak;
                 for (auto& v : out.src)  v -= out.peak;
-                //double peak_d = *std::max_element(out.diff.begin(), out.diff.end());
-                //peak_d = peak_d < out.peak ? out.peak : peak_d;
-                if (haveSource)
+                if (haveSource && haveReference) {
+                    double peak_d = *std::max_element(out.diff.begin(), out.diff.end());
+                    peak_d = 0.0 - peak_d;
+                    for (auto& v : out.diff) v += peak_d;
+                } else if (haveSource)
                     for (auto& v : out.diff) v -= out.peak;
             }
         }
